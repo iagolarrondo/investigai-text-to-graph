@@ -1,0 +1,2 @@
+Each entry in T_NORM_INVOICE corresponds to an invoice record. CLAIM_ID in T_NORM_INVOICE is a foreign key which identifies for which claim the invoice was submitted.
+NORM_INVOICE_ID is the primary key of T_NORM_INVOICE.

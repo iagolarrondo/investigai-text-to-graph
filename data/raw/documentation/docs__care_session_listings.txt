@@ -1,0 +1,14 @@
+If you are asked about a list of caregiver/care sessions for a claim or provider, use INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS
+as the default and preferred table. It contains session, ICP provider, billing, geolocation and device information in a single
+flat structure without requiring complex joins.
+
+1. Filter by CLAIM_NUMBER (not CLAIM_ID) using a WHERE clause on CLAIM_NUMBER field directly in INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS.
+   Provider name is directly available via PROVIDER_NAME column. No join to T_RESOLVED_PERSON is needed.
+2. Do not select all columns with *. Only include columns relevant to the question. Typically include:
+   - PROVIDER_NAME
+   - SESSION_START_TS, SESSION_END_TS
+   - NUM_HOURS, HOURLY_RATE, CHARGE_AMT
+   - CHECK_IN_DEVICE_ID, CHECK_OUT_DEVICE_ID
+   - SESSION_SUBMISSION_STATUS, SESSION_REJECTION_COMMENTS
+3. Do not return all records by default. If a specific number is not requested, default to top 10 most recent sessions ordered by SESSION_START_TS DESC. Use "SELECT TOP 10" for this.
+4. Only fall back to T_NORM_CARE_SESSION joined with T_NORM_CLAIM and T_RESOLVED_PERSON if the question requires information not available in INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS, such as ADL activity breakdown columns.

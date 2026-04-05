@@ -1,0 +1,11 @@
+Each record in T_NORM_POLICY corresponds to a policy record in the system. POLICY_NUMBER is the primary key of T_NORM_POLICY, and other tables
+can be joined to T_NORM_POLICY via POLICY_NUMBER column.
+
+Some important columns are described below:
+
+- POLICY_STATUS column describes the current status of the policy. It can have values such as 'Active', 'Terminated', 'Inactive', 'Suspended'. POLICY_SUB_STATUS column may have more information on the details of the policy status.
+- ALF_DMB and ALF_MMB correspond to daily and monthly maxmimum benefit for assisted living facility care. Typically only one of the two fields will be non-null.
+- ICP_DMB and ICP_MMB correspond to daily and monthly maxmimum benefit for informal care provider (ICP) care. Typically only one of the two fields will be non-null.
+- NH_DMB and NH_MMB correspond to daily and monthly maxmimum benefit for nursing home care. Typically only one of the two fields will be non-null.
+- HHC_DMB and HHC_MMB correspond to daily and monthly maxmimum benefit for home health care. Typically only one of the two fields will be non-null.
+

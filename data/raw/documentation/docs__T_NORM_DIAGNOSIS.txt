@@ -1,0 +1,2 @@
+Each row in T_NORM_DIAGNOSIS corresponds to a diagnosis for a claimant. CLAIM_ID column specifies for which claim this diagnosis is determined. To get the 
+corresponding claim number, T_NORM_DIAGNOSIS can be joined with T_NORM_CLAIM.

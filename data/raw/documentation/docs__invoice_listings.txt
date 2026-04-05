@@ -1,0 +1,11 @@
+If you are asked to list invoices for a claim, keep the following in mind:
+1. You can join T_NORM_INVOICE with T_NORM_CLAIM on CLAIM_ID and filter on CLAIM_NUMBER field on T_NORM_CLAIM to get the desired claim number.
+2. Do not select all columns with *, try to only include columns relevant to the question. Definitely include the following:
+- Invoice received date
+- Invoice charge & pay amount
+- Invoice status
+3. Also try to include the name of the provider who provided care on this invoice. You can do this by:
+- LEFT JOIN to T_RESOLVED_PERSON_INVOICE_CROSSWALK to see if you can find a person record who provided care on this invoice
+- LEFT JOIN to T_RESOLVED_BUSINESS_INVOICE_CROSSWALK to see if you can find a business record who provided care on this invoice
+- Display provider name either by BUSINESS_NAME (if provider is a business) or CONCAT(FIRST_NAME, ' ', LAST_NAME) (if provider is a person).
+4. Do not pick all records by default, if a particular number of records is not provided, default to top 10. You can sort records such that most recent invoices (with latest service dates) come first.

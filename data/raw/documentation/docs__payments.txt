@@ -1,0 +1,19 @@
+To inquire about payment amounts for a provider, use INVOICE_PAY_AMT from T_NORM_INVOICE. Do NOT directly query T_NORM_PAYMENT
+as that table does not link back to the provider who provided the service.
+
+Please note the word 'reimbursement' may also be used to inquire about payments for a service.
+
+Payment records for invoices are stored in T_NORM_PAYMENT. Each row represents a single
+payment transaction made against an invoice.
+
+To retrieve payments for a specific claim:
+  T_NORM_PAYMENT → T_NORM_INVOICE (on NORM_INVOICE_ID) → T_NORM_CLAIM (on CLAIM_ID)
+  Filter using CLAIM_NUMBER in T_NORM_CLAIM.
+
+To find the bank account associated with a payment:
+  T_NORM_PAYMENT → T_RESOLVED_PAYMENT_BANK_ACCOUNT_CROSSWALK (on NORM_PAYMENT_ID)
+                → T_RESOLVED_BANK_ACCOUNT (on RES_BANK_ACCOUNT_ID)
+
+To find the bank account(s) associated with a person (claimant or provider):
+  T_RESOLVED_PERSON → T_RESOLVED_PERSON_BANK_ACCOUNT_CROSSWALK (on RES_PERSON_ID)
+                    → T_RESOLVED_BANK_ACCOUNT (on RES_BANK_ACCOUNT_ID)

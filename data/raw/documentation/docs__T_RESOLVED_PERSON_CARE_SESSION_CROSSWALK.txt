@@ -1,0 +1,1 @@
+Each entry in T_RESOLVED_PERSON_CARE_SESSION_CROSSWALK corresponds to a person (RES_PERSON_ID) providing care on a care session (NORM_CARE_SESSION_ID). The only possible value for EDGE_NAME is 'PROVIDED_CARE_ON_SESSION'.

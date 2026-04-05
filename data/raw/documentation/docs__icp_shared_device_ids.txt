@@ -1,0 +1,18 @@
+If you are asked if there are any shared devices across ICPs or if there are any ICPs using the same device IDs in a given claim, make use of the following tables: T_NORM_CARE_SESSION, T_RESOLVED_PERSON_CARE_SESSION_CROSSWALK, T_RESOLVED_PERSON and T_NORM_CLAIM when generating the SQL query.
+All these question variants are equivalent and should generate the same SQL query.
+ 
+Write a query that accomplishes the following:
+
+1. Finds all ICPs that provided care in the specified claim by examining all care sessions for that claim.
+2. Finds all device IDs from all associated care session in that claim that were used by the ICPs
+
+Ultimately, the goal is to extract a distinct ICPs with their associated check-in and check-out device IDs used across all care sessions in the specified claim.
+
+Here is an example output table:
+| ICP_ID | ICP_FIRST_NAME | ICP_LAST_NAME | CHECK_IN_DEVICE_ID | CHECK_OUT_DEVICE_ID
+| 2380234 |	ALICE | SMITH | AABBCC	| AABBCC |
+| 4893252 | BOB | SMITH | CCDDEE | CCDDEE |
+| 4893252 | BOB | SMITH | CCDDEE | EEFFGG |
+
+Here ICP_ID denotes the ID given to the ICP, ICP_FIRST_NAME and ICP_LAST_NAME are the ICPs first and last names and CHECK_IN_DEVICE_ID and CHECK_OUT_DEVICE_ID denote the device IDs used by the ICP to check in and check out from a care session.
+Make use of the DISTINCT statement in order to not show duplicate row information.

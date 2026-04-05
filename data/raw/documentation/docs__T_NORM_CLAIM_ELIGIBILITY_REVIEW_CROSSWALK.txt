@@ -1,0 +1,2 @@
+Each row in T_NORM_CLAIM_ELIGIBILITY_REVIEW_CROSSWALK corresponds to a connection bewteen a claim (identified via CLAIM_ID) and provider eligibility review (identified via NORM_ELIGIBILITY_REVIEW_ID).
+The provider eligibility reviews that are conducted on providers for a claim can be found in T_NORM_CLAIM_ELIGIBILITY_REVIEW_CROSSWALK. The EDGE_NAME is 'HAS_ELIGIBILITY_REVIEW'.

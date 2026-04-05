@@ -1,0 +1,12 @@
+/*
+Each record in T_RESOLVED_PERSON_ADDRESS_CROSSWALK correspond to a person (RES_PERSON_ID) located in an address record (RES_ADDRESS_ID).
+The possible values for EDGE_NAME is 'LOCATED_IN'.
+*/
+CREATE TABLE {catalog_name}.{schema_name}.T_RESOLVED_PERSON_ADDRESS_CROSSWALK
+(
+	RES_PERSON_ID BIGINT,
+	EDGE_NAME VARCHAR(30),
+	EFFECTIVE_DATE DATETIME,
+	IS_LATEST_ADDRESS_IND INT,
+	RES_ADDRESS_ID BIGINT
+)

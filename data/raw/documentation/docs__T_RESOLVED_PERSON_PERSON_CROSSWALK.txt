@@ -1,0 +1,8 @@
+Each record in T_RESOLVED_PERSON_PERSON_CROSSWALK corresponds to a relationship between two person records (RES_PERSON_ID_SRC and RES_PERSON_ID_TGT).
+
+EDGE_NAME column specifies what kind of relationship the two people has. The following values are possible for EDGE_NAME:
+- 'IS_SPOUSE_OF': Indicates spousal relationship between two people
+- 'ACT_ON_BEHALF_OF': Indicates RES_PERSON_ID_SRC is power of attorney (POA) over RES_PERSON_ID_TGT
+- 'HIPAA_AUTHORIZED_ON': Indicates RES_PERSON_ID_SRC has HIPAA authorization on RES_PERSON_ID_TGT, hence they are able to access their medical records
+- 'IS_RELATED_TO': Indicates some type of family/relative relationship between RES_PERSON_ID_SRC and RES_PERSON_ID_TGT. EDGE_DETAIL column may have details about what this relationship is.
+- 'RECEIVE_CARE_FROM': Indicates that RES_PERSON_ID_SRC is receiving care from RES_PERSON_ID_TGT.

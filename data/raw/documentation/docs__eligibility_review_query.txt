@@ -1,0 +1,11 @@
+If you're asked about an eligibility review for a given provider/ICP, you can use T_NORM_ELIGIBILITY_REVIEW for the review records.
+If the care provider is a person (an ICP), join this with T_RESOLVED_PERSON_ELIGIBILITY_REVIEW_CROSSWALK to get the following information:
+* The ICP who received the review (when the EDGE_NAME is 'RECEIVES_REVIEW')
+* The person who conducted the review (when the EDGE_NAME is 'ASSESS_ELIGIBILITY')
+
+If the care provider is a business (can be an HHCA, nursing home or assisted living facility), then join with T_RESOLVED_BUSINESS_ELIGIBILITY_REVIEW_CROSSWALK
+to get the eligibility review records for that business.
+
+This can apply to questions such as:
+* Is the ICP approved for this claim?
+* Can you pull eligibility reviews for this claim?

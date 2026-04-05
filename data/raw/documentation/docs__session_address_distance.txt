@@ -1,0 +1,71 @@
+If you are asked about distances between care session check-in/check-outs and the policyholder's address,
+follow this priority order:
+
+OPTION 1 (Preferred): Use precomputed distance columns in INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS.
+This table already contains the following precomputed distance fields and should be used by default:
+- CHECK_IN_DISTANCE_TO_CLOSEST_ADDRESS_IN_MILES: distance between check-in geolocation and the closest
+  policyholder address associated with the claim.
+- CHECK_OUT_DISTANCE_TO_CLOSEST_ADDRESS_IN_MILES: distance between check-out geolocation and the closest
+  policyholder address associated with the claim.
+- CHECK_IN_CHECK_OUT_DISTANCE_IN_MILES: distance between check-in and check-out geolocations.
+
+RETRIEVING THE POLICYHOLDER'S ADDRESS FOR A CARE SESSION:
+INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS contains two address ID fields that directly identify the closest
+policyholder address for each session:
+- CHECK_IN_CLOSEST_ADDRESS_ID: the RES_ADDRESS_ID of the policyholder address closest to check-in.
+- CHECK_OUT_CLOSEST_ADDRESS_ID: the RES_ADDRESS_ID of the policyholder address closest to check-out.
+
+These can be joined directly to T_RESOLVED_ADDRESS on RES_ADDRESS_ID to retrieve full address details
+and coordinates WITHOUT needing to look up the policyholder's RES_PERSON_ID or join through
+T_RESOLVED_PERSON_ADDRESS_CROSSWALK.
+
+IMPORTANT: A policyholder can have multiple addresses. CHECK_IN_CLOSEST_ADDRESS_ID and
+CHECK_OUT_CLOSEST_ADDRESS_ID already resolve which specific address was closest to each care session
+event. This is the most precise way to identify the address where care was received and should always
+be preferred over looking up all addresses for the policyholder via T_RESOLVED_PERSON_ADDRESS_CROSSWALK.
+
+Example — retrieving check-in address details and coordinates for sessions on a claim:
+   SELECT TOP 10
+       s.PROVIDER_NAME,
+       s.SESSION_START_TS,
+       s.SESSION_END_TS,
+       s.CHECK_IN_DISTANCE_TO_CLOSEST_ADDRESS_IN_MILES,
+       a.ADDRESS_LINE_1,
+       a.CITY,
+       a.STATE,
+       a.ZIP_CODE,
+       a.LATITUDE  AS ADDRESS_LATITUDE,
+       a.LONGITUDE AS ADDRESS_LONGITUDE,
+       s.CHECK_IN_LATITUDE,
+       s.CHECK_IN_LONGITUDE
+   FROM INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS s
+   JOIN T_RESOLVED_ADDRESS a
+       ON a.RES_ADDRESS_ID = s.CHECK_IN_CLOSEST_ADDRESS_ID
+   WHERE s.CLAIM_NUMBER = '<claim_number>'
+   ORDER BY s.CHECK_IN_DISTANCE_TO_CLOSEST_ADDRESS_IN_MILES DESC
+
+OPTION 2 (Fallback): Use haversine_miles() only when:
+- Distances need to be computed against a specific address that is NOT the precomputed closest address, OR
+- The question involves ping-level geolocation events from T_NORM_CARE_SESSION_EVENT which require
+  raw coordinate computation against an address.
+
+In those cases, you can still use CHECK_IN_CLOSEST_ADDRESS_ID or CHECK_OUT_CLOSEST_ADDRESS_ID to join
+directly to T_RESOLVED_ADDRESS for the policyholder's address coordinates, then compute distance:
+
+   haversine_miles(ping_lat, ping_lon, address.LATITUDE, address.LONGITUDE)
+
+Only fall back to T_RESOLVED_PERSON_ADDRESS_CROSSWALK if you specifically need ALL addresses associated
+with a policyholder, not just the closest one to a care session.
+
+Use the haversine_miles function as follows: haversine_miles(lat1, long1, lat2, long2)
+
+IMPORTANT NOTES:
+- Never use T_RESOLVED_PERSON_ADDRESS_CROSSWALK to find the care session address when
+  CHECK_IN_CLOSEST_ADDRESS_ID or CHECK_OUT_CLOSEST_ADDRESS_ID are available — those fields already
+  resolve the correct address unambiguously.
+- If the question asks for a summary (not specific sessions), DO NOT retrieve individual records.
+  Use MIN/MAX/AVG aggregations on the distance columns instead.
+- If the question asks for specific sessions matching a condition, default to top 10 most recent
+  sessions ordered by SESSION_START_TS DESC. Use "SELECT TOP 10" for this.
+- Always prefer precomputed columns in INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS over recomputing
+  with haversine_miles() when the information is already available.

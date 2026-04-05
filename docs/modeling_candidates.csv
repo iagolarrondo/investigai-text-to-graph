@@ -1,0 +1,88 @@
+object_name,source_file,object_type,candidate_role,likely_graph_use,priority_for_poc,comments
+INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS,data/raw/ddl/Create_Table__INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS.sql,table,feature_table,derived,medium,Pre-joined or feature-rich table; optional for first graph slice.
+INVESTIGAI_ICP_WORK_BLOCKS,data/raw/ddl/Create_Table__INVESTIGAI_ICP_WORK_BLOCKS.sql,table,feature_table,derived,medium,Pre-joined or feature-rich table; optional for first graph slice.
+INVESTIGAI_PROVIDER_CLAIMS,data/raw/ddl/Create_Table__INVESTIGAI_PROVIDER_CLAIMS.sql,table,feature_table,derived,medium,Pre-joined or feature-rich table; optional for first graph slice.
+T_NORM_CARE_SESSION,data/raw/ddl/Create_Table__T_NORM_CARE_SESSION.sql,table,event,node,high,Care delivery timeline; fraud-relevant behavior.
+T_NORM_CARE_SESSION_EVENT,data/raw/ddl/Create_Table__T_NORM_CARE_SESSION_EVENT.sql,table,event,node,high,Care delivery timeline; fraud-relevant behavior.
+T_NORM_CHARGE,data/raw/ddl/Create_Table__T_NORM_CHARGE.sql,table,event,property_source,high,Billing and money flow; amounts and timing on graph.
+T_NORM_CLAIM,data/raw/ddl/Create_Table__T_NORM_CLAIM.sql,table,event,node,high,Central claim object; hub for many relationships.
+T_NORM_CLAIM_ELIGIBILITY_REVIEW_CROSSWALK,data/raw/ddl/Create_Table__T_NORM_CLAIM_ELIGIBILITY_REVIEW_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_NORM_CLINICAL_REVIEW,data/raw/ddl/Create_Table__T_NORM_CLINICAL_REVIEW.sql,table,event,node,medium,Clinical and eligibility assessments.
+T_NORM_DIAGNOSIS,data/raw/ddl/Create_Table__T_NORM_DIAGNOSIS.sql,table,event,node,medium,Clinical and eligibility assessments.
+T_NORM_ELIGIBILITY_REVIEW,data/raw/ddl/Create_Table__T_NORM_ELIGIBILITY_REVIEW.sql,table,event,node,medium,Clinical and eligibility assessments.
+T_NORM_INVOICE,data/raw/ddl/Create_Table__T_NORM_INVOICE.sql,table,event,property_source,high,Billing and money flow; amounts and timing on graph.
+T_NORM_PAYMENT,data/raw/ddl/Create_Table__T_NORM_PAYMENT.sql,table,event,property_source,high,Billing and money flow; amounts and timing on graph.
+T_NORM_POLICY,data/raw/ddl/Create_Table__T_NORM_POLICY.sql,table,entity,node,high,Policy contract anchor.
+T_NORM_POLICY_RIDER,data/raw/ddl/Create_Table__T_NORM_POLICY_RIDER.sql,table,entity,property_source,medium,Rider details; often properties on Policy.
+T_NORM_REVIEW_CYCLE,data/raw/ddl/Create_Table__T_NORM_REVIEW_CYCLE.sql,table,event,node,low,Audit or review workflow; later wave for investigations.
+T_NORM_REVIEW_CYCLE_METRIC,data/raw/ddl/Create_Table__T_NORM_REVIEW_CYCLE_METRIC.sql,table,event,node,low,Audit or review workflow; later wave for investigations.
+T_NORM_REVIEW_CYCLE_REMEDIATION,data/raw/ddl/Create_Table__T_NORM_REVIEW_CYCLE_REMEDIATION.sql,table,event,node,low,Audit or review workflow; later wave for investigations.
+T_RESOLVED_ADDRESS,data/raw/ddl/Create_Table__T_RESOLVED_ADDRESS.sql,table,entity,node,high,Physical address; attach to Person or Business.
+T_RESOLVED_BANK_ACCOUNT,data/raw/ddl/Create_Table__T_RESOLVED_BANK_ACCOUNT.sql,table,entity,node,high,Bank account endpoint; link payments and parties.
+T_RESOLVED_BUSINESS,data/raw/ddl/Create_Table__T_RESOLVED_BUSINESS.sql,table,entity,node,high,Core party nodes (Person/Business).
+T_RESOLVED_BUSINESS_ADDRESS_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_BUSINESS_ADDRESS_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_BUSINESS_ELIGIBILITY_REVIEW_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_BUSINESS_ELIGIBILITY_REVIEW_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_BUSINESS_INVOICE_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_BUSINESS_INVOICE_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_BUSINESS_PERSON_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_BUSINESS_PERSON_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_CARE_SESSION_EVENT_GEOLOCATION_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_CARE_SESSION_EVENT_GEOLOCATION_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_CARE_SESSION_GEOLOCATION_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_CARE_SESSION_GEOLOCATION_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_GEOLOCATION,data/raw/ddl/Create_Table__T_RESOLVED_GEOLOCATION.sql,table,entity,node,high,Geolocation facts; session and distance signals.
+T_RESOLVED_PAYMENT_BANK_ACCOUNT_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_PAYMENT_BANK_ACCOUNT_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_PERSON,data/raw/ddl/Create_Table__T_RESOLVED_PERSON.sql,table,entity,node,high,Core party nodes (Person/Business).
+T_RESOLVED_PERSON_ADDRESS_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_PERSON_ADDRESS_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_PERSON_BANK_ACCOUNT_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_PERSON_BANK_ACCOUNT_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_PERSON_CARE_SESSION_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_PERSON_CARE_SESSION_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_PERSON_ELIGIBILITY_REVIEW_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_PERSON_ELIGIBILITY_REVIEW_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_PERSON_INVOICE_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_PERSON_INVOICE_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_PERSON_PERSON_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_PERSON_PERSON_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+T_RESOLVED_PERSON_POLICY_CROSSWALK,data/raw/ddl/Create_Table__T_RESOLVED_PERSON_POLICY_CROSSWALK.sql,table,relationship,edge,high,Links two domain objects; primary graph edge materialization.
+V_RESOLVED_CARE_SESSION_GEOLOCATION_CROSSWALK,data/raw/ddl/Create_View__V_RESOLVED_CARE_SESSION_GEOLOCATION_CROSSWALK.sql,table,reference,derived,medium,View over resolved geolocation crosswalk; convenience for loads.
+COG_impairment,data/raw/documentation/docs__COG_impairment.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+DMB,data/raw/documentation/docs__DMB.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+HIPAA,data/raw/documentation/docs__HIPAA.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS,data/raw/documentation/docs__INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+POA,data/raw/documentation/docs__POA.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+T_NORM_CARE_SESSION,data/raw/documentation/docs__T_NORM_CARE_SESSION.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_NORM_CARE_SESSION_EVENT,data/raw/documentation/docs__T_NORM_CARE_SESSION_EVENT.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_NORM_CLAIM,data/raw/documentation/docs__T_NORM_CLAIM.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_NORM_CLAIM_ELIGIBILITY_REVIEW_CROSSWALK,data/raw/documentation/docs__T_NORM_CLAIM_ELIGIBILITY_REVIEW_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_NORM_CLINICAL_REVIEW,data/raw/documentation/docs__T_NORM_CLINICAL_REVIEW.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_NORM_DIAGNOSIS,data/raw/documentation/docs__T_NORM_DIAGNOSIS.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_NORM_ELIGIBILITY_REVIEW,data/raw/documentation/docs__T_NORM_ELIGIBILITY_REVIEW.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_NORM_INVOICE,data/raw/documentation/docs__T_NORM_INVOICE.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_NORM_POLICY,data/raw/documentation/docs__T_NORM_POLICY.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_ADDRESS,data/raw/documentation/docs__T_RESOLVED_ADDRESS.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_BUSINESS,data/raw/documentation/docs__T_RESOLVED_BUSINESS.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_BUSINESS_ELIGIBILITY_REVIEW_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_BUSINESS_ELIGIBILITY_REVIEW_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_BUSINESS_INVOICE_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_BUSINESS_INVOICE_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_BUSINESS_PERSON_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_BUSINESS_PERSON_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_CARE_SESSION_GEOLOCATION_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_CARE_SESSION_GEOLOCATION_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_GEOLOCATION,data/raw/documentation/docs__T_RESOLVED_GEOLOCATION.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_PERSON,data/raw/documentation/docs__T_RESOLVED_PERSON.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_PERSON_ADDRESS_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_PERSON_ADDRESS_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_PERSON_CARE_SESSION_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_PERSON_CARE_SESSION_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_PERSON_ELIGIBILITY_REVIEW_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_PERSON_ELIGIBILITY_REVIEW_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_PERSON_INVOICE_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_PERSON_INVOICE_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_PERSON_PERSON_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_PERSON_PERSON_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+T_RESOLVED_PERSON_POLICY_CROSSWALK,data/raw/documentation/docs__T_RESOLVED_PERSON_POLICY_CROSSWALK.txt,documentation,reference,property_source,medium,Table-level field notes; use when mapping columns to nodes or edges.
+care_session_listings,data/raw/documentation/docs__care_session_listings.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+clinical_review_listings,data/raw/documentation/docs__clinical_review_listings.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+deceased,data/raw/documentation/docs__deceased.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+eligibility_review_query,data/raw/documentation/docs__eligibility_review_query.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+geolocation_enabled,data/raw/documentation/docs__geolocation_enabled.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+hourly_rate,data/raw/documentation/docs__hourly_rate.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+icp_no_breaks,data/raw/documentation/docs__icp_no_breaks.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+icp_shared_device_ids,data/raw/documentation/docs__icp_shared_device_ids.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+invoice_listings,data/raw/documentation/docs__invoice_listings.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+multi_icp_overlap,data/raw/documentation/docs__multi_icp_overlap.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+no_touch,data/raw/documentation/docs__no_touch.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+payments,data/raw/documentation/docs__payments.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+policyholder_query,data/raw/documentation/docs__policyholder_query.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+provider_query,data/raw/documentation/docs__provider_query.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+review_cycles,data/raw/documentation/docs__review_cycles.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+session_address_distance,data/raw/documentation/docs__session_address_distance.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+spouses,data/raw/documentation/docs__spouses.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+start_of_care,data/raw/documentation/docs__start_of_care.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+writing_agent,data/raw/documentation/docs__writing_agent.txt,documentation,reference,property_source,low,Rule or query narrative; informs edge labels or flags.
+GRAPH_DATA_MODEL,data/raw/graph/GRAPH_DATA_MODEL.md,graph_model,reference,derived,high,Target Neo4j shapes; align prototype nodes and edges to this doc.
+readme_data_catalog,data/raw/readme.md,documentation,reference,property_source,high,Orientation to domains and table naming; onboarding for modeling.

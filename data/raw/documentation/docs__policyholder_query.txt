@@ -1,0 +1,3 @@
+If you are asked about who the policyholder is, come up with a query that fetches
+FIRST_NAME, LAST_NAME, SSN, BIRTH_DATE and SEX of the policyholder, and computes the age
+of the policyholder based on their birth date.

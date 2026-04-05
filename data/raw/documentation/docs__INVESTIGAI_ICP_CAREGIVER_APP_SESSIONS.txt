@@ -1,0 +1,47 @@
+INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS is a denormalized feature table that serves as the primary and most efficient entry point for querying ICP caregiver app activity.
+Each entry corresponds to a single care session logged by an ICP provider using the caregiver app.
+This table consolidates session, ICP provider, claim, geolocation, device, and billing information into a single flat structure, avoiding the need for complex multi-table joins in most common queries.
+
+IMPORTANT: Always use CLAIM_NUMBER field (not CLAIM_ID) when filtering by claim. CLAIM_ID is a database internal primary key and is NOT the same as the human-readable claim number.
+Always apply a WHERE clause on CLAIM_NUMBER to filter for a specific claim.
+
+When to use this table:
+- Use INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS as the FIRST and DEFAULT choice for any question involving ICP caregiver app sessions, provider activity, hourly rates, session charges, geolocation check-in/check-out, device IDs, pings, or submission status for a given claim or provider.
+- This table is sufficient for the vast majority of caregiver app questions without requiring additional joins to T_NORM_CARE_SESSION, T_NORM_CLAIM, T_RESOLVED_PERSON, T_RESOLVED_GEOLOCATION, or T_RESOLVED_CARE_SESSION_GEOLOCATION_CROSSWALK.
+- Only fall back to those underlying normalized tables if the question requires information not available in this table (e.g., ADL activity breakdown from T_NORM_CARE_SESSION, individual ping-level events from T_NORM_CARE_SESSION_EVENT, or address lookups).
+
+Provider information:
+- PROVIDER_NAME contains the full name of the ICP provider directly in this table. No join to T_RESOLVED_PERSON is needed to display the provider name.
+- PROVIDER_ID corresponds to RES_PERSON_ID in T_RESOLVED_PERSON and can be used to join if additional person-level details are required.
+- All providers in this table are ICP (Individual Care Provider) type providers.
+
+Session information:
+- SESSION_START_TS and SESSION_END_TS are the start and end timestamps of the care session.
+- NUM_HOURS is the number of hours logged for the session.
+- SESSION_TYPE indicates whether the session was logged as 'Manual' or 'Live' via the caregiver app.
+- SESSION_SUBMISSION_STATUS reflects the current submission status of the session. Possible values are: 'Approved', 'Submitted', 'Denied', 'Denied-Deleted', 'Not Submitted'.
+- SESSION_REJECTION_COMMENTS contains free-form rejection comments when a session has been denied.
+
+Billing information:
+- HOURLY_RATE is the rate charged by the provider per hour of care for that session.
+- CHARGE_AMT is the total charge amount for the session (i.e., NUM_HOURS * HOURLY_RATE).
+- If asked about hourly rates for a provider across sessions, return the minimum, maximum, and average hourly rate. Do NOT return every individual session record for this.
+
+Geolocation information:
+- CHECK_IN_LATITUDE / CHECK_IN_LONGITUDE and CHECK_OUT_LATITUDE / CHECK_OUT_LONGITUDE are the raw geolocation coordinates for the check-in and check-out events.
+- CHECK_IN_CHECK_OUT_DISTANCE_IN_MILES is the straight-line distance in miles between the check-in and check-out locations. A large value may indicate the provider was not at the same location at the end of the session as they were at the start.
+- CHECK_IN_DISTANCE_TO_CLOSEST_ADDRESS_IN_MILES and CHECK_OUT_DISTANCE_TO_CLOSEST_ADDRESS_IN_MILES represent the distance in miles between the check-in or check-out geolocation and the closest known address associated with the policyholder on the claim. A large value may indicate the provider checked in or out from a location far from the policyholder's address.
+- CHECK_IN_CLOSEST_ADDRESS_ID and CHECK_OUT_CLOSEST_ADDRESS_ID are the RES_ADDRESS_ID values for the closest policyholder address to the respective check-in/check-out geolocation. Join these directly to T_RESOLVED_ADDRESS on RES_ADDRESS_ID to retrieve full address details (ADDRESS_LINE_1, CITY, STATE, ZIP_CODE) and address coordinates (LATITUDE, LONGITUDE).
+
+IMPORTANT: Use CHECK_IN_CLOSEST_ADDRESS_ID / CHECK_OUT_CLOSEST_ADDRESS_ID to identify the policyholder's care address. Do NOT look up the policyholder's RES_PERSON_ID and join throughT_RESOLVED_PERSON_ADDRESS_CROSSWALK for this purpose — a policyholder can have multiple addresses and those fields already unambiguously resolve the specific address closest to each care session event. This is also the most efficient path to retrieve the address coordinates for haversine_miles() calculations if needed.
+
+Device information:
+- CHECK_IN_DEVICE_ID and CHECK_OUT_DEVICE_ID are the device identifiers used by the provider at check-in and check-out respectively.
+- If CHECK_IN_DEVICE_ID differs from CHECK_OUT_DEVICE_ID within the same session, this may indicate a device switch during the session which may be worth investigating.
+- If the same device ID appears across multiple providers or claims, this may be a signal of shared device usage worth investigating.
+
+Ping information:
+- NUM_PINGS is the total number of geolocation/device pings recorded by the caregiver app during the session. A session with zero pings logged as 'Live' may indicate the provider did not have the app active during the session.
+- MAX_PING_DISTANCE_TO_CHECK_IN_MILES is the maximum distance in miles between any ping recorded during the session and the check-in location. A high value suggests the provider moved significantly from their check-in location during the session.
+- MAX_PING_DISTANCE_TO_CHECK_OUT_MILES is the maximum distance in miles between any ping recorded during the session and the check-out location.
+- For individual ping-level event detail (timestamps, per-ping geolocations), join T_NORM_CARE_SESSION_EVENT on NORM_CARE_SESSION_ID and then T_RESOLVED_CARE_SESSION_EVENT_GEOLOCATION_CROSSWALK and T_RESOLVED_GEOLOCATION for coordinates. Only do this if the question specifically requires ping-level granularity.

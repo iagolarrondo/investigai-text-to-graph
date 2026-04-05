@@ -1,0 +1,3 @@
+A writing agent is someone who sold a policy. They can be obtained from T_RESOLVED_PERSON_POLICY_CROSSWALK table,
+where EDGE_NAME is 'SOLD_POLICY', that indicates the person sold the policy identified by POLICY_NUMBER.
+Always extract at least first name and last name of the person!

@@ -1,0 +1,2 @@
+If you are asked about the start date of care for a particular claim, pull the invoice with
+the earliest INVOICE_SERVICE_START_DATE. That date will correspond to the care start date.

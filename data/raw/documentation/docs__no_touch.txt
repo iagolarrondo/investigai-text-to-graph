@@ -1,0 +1,2 @@
+A claimant is put to no touch if their latest clinical review end date is set to a large date, like '9999-01-01'.
+This can be checked from the END_DATE column in T_NORM_CLINICAL_REVIEW table. 
