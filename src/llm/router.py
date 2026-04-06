@@ -59,6 +59,9 @@ VALID_INTENTS: set[str] = {
     "business_patterns",
 }
 
+# Stores raw debug info from the most recent routing call (for UI display)
+last_routing_debug: dict = {}
+
 
 @dataclass
 class RouterDecision:
@@ -115,6 +118,10 @@ def route_question_llm(question: str) -> RouterDecision:
             messages=messages,
         )
         raw = response.content[0].text.strip()
+
+        last_routing_debug["system_prompt"] = SYSTEM_INTENT_ROUTER
+        last_routing_debug["messages"] = messages
+        last_routing_debug["raw_response"] = raw
 
         # Strip markdown fences if the model wraps with ```json ... ```
         if raw.startswith("```"):

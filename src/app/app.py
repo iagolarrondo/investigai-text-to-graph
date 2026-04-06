@@ -19,15 +19,19 @@ If Streamlit cannot import ``src``, set PYTHONPATH to the project root::
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
 from pathlib import Path
 
+import tempfile
+
 import anthropic
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import networkx as nx
+import streamlit.components.v1 as components
 import pandas as pd
 import streamlit as st
 
@@ -52,10 +56,19 @@ from src.llm.router import (  # noqa: E402
     dispatch_routed_query,
     route_question_rules,
 )
+import src.llm.router as _router_mod  # for last_routing_debug
 
-# Matches graph node ids embedded in table cells (person_5001, claim_C9000..., policy_POL-...)
+# Accumulates raw LLM I/O for the current query run (reset each run)
+_LLM_DEBUG: list[dict] = []
+
+# Matches graph node ids embedded in table cells.
+# Supports both old underscore format (person_5001) and Neo4j pipe format (Person|1001).
 _NODE_ID_IN_TEXT = re.compile(
-    r"\b(?:person|claim|policy|bank|business|address)_[A-Za-z0-9.-]+\b"
+    r"(?:"
+    r"\b(?:person|claim|policy|bank|business|address)_[A-Za-z0-9.-]+"
+    r"|"
+    r"\b(?:Person|Claim|Policy|Business|Address|BankAccount)\|[A-Za-z0-9|.+-]+"
+    r")"
 )
 
 
@@ -96,14 +109,22 @@ def _collect_node_ids_from_result(kind: str, payload: object) -> set[str]:
     """
     Pull graph node ids mentioned in query result tables.
 
-    We scan every cell in the result DataFrames for tokens like ``person_5001`` or
-    ``policy_POL-LTC-10001`` so comma-separated columns are handled without
-    hard-coding every column name.
+    Scans columns named ``node_id`` or ending with ``_node_id`` directly (these hold
+    raw graph IDs), then also text-scans all cells for Neo4j-format IDs like
+    ``Person|1001`` or old underscore IDs like ``person_5001``.
     """
     ids: set[str] = set()
 
     def scan_df(df: pd.DataFrame) -> None:
         for col in df.columns:
+            col_lower = col.lower()
+            # Collect entire cell value for columns that store node IDs directly
+            if col_lower == "node_id" or col_lower.endswith("_node_id"):
+                for val in df[col].dropna():
+                    v = str(val).strip()
+                    if v and v != "nan":
+                        ids.add(v)
+            # Also regex-scan every cell for embedded node IDs
             for val in df[col].dropna():
                 ids.update(_NODE_ID_IN_TEXT.findall(str(val)))
 
@@ -115,8 +136,11 @@ def _collect_node_ids_from_result(kind: str, payload: object) -> set[str]:
                 scan_df(v)
     elif kind == "claim_subgraph" and isinstance(payload, dict):
         nd = payload.get("nodes")
-        if isinstance(nd, pd.DataFrame) and not nd.empty and "node_id" in nd.columns:
-            ids.update(nd["node_id"].astype(str).tolist())
+        if isinstance(nd, pd.DataFrame) and not nd.empty:
+            scan_df(nd)
+        ed = payload.get("edges")
+        if isinstance(ed, pd.DataFrame) and not ed.empty:
+            scan_df(ed)
     elif isinstance(payload, dict) and "table" in payload:
         t = payload.get("table")
         if isinstance(t, pd.DataFrame) and not t.empty:
@@ -530,38 +554,330 @@ def _payload_to_text(kind: str, payload: object) -> str:
     return "\n".join(lines) if lines else "(no data)"
 
 
-def _generate_nl_summary(question: str, kind: str, payload: object) -> str:
-    """Call Claude to produce a direct, concise answer to the investigator's question."""
+def _plan_followups_and_answer(
+    question: str, kind: str, payload: object
+) -> tuple[str, list[dict]]:
+    """
+    Ask Claude to (a) answer the question and (b) identify up to 2 follow-up graph
+    queries that would deepen the investigation.
+
+    Returns ``(initial_answer, follow_ups)`` where ``follow_ups`` is a list of dicts
+    with keys ``intent``, ``claim_node_id`` (str | None), and ``reason``.
+    Falls back to ``("", [])`` on any error.
+    """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        return ""
+        return "", []
 
     results_text = _payload_to_text(kind, payload)
+    from src.llm.prompts import QUERY_SCENARIOS
 
-    prompt = f"""You are an insurance fraud investigator's assistant.
+    prompt = f"""You are an insurance fraud investigator's assistant with deep knowledge of the InvestigAI graph system.
+
+<query_scenarios>
+{QUERY_SCENARIOS}
+</query_scenarios>
 
 The investigator asked: "{question}"
 
-Graph query results:
+Initial graph query results (intent: {kind}):
 {results_text}
 
-Answer the question directly and concisely in 1–3 sentences using only what the results show.
-Use specific names, IDs, and values from the data. If the results show nothing suspicious, say so plainly."""
+Respond with valid JSON only — no markdown, no text outside the JSON:
+{{
+  "answer": "<direct 1–3 sentence answer using specific names, IDs, and values from the data>",
+  "follow_ups": [
+    {{
+      "intent": "<one of: claim_network | claim_subgraph | shared_bank | people_clusters | business_patterns>",
+      "claim_node_id": "<graph node id string (e.g. Claim|C001) or null>",
+      "reason": "<one sentence: what this follow-up reveals and why it matters>"
+    }}
+  ]
+}}
+
+Rules:
+- "follow_ups" must contain 1–2 entries that are genuinely different from the current intent ({kind}) and would add new investigative value based on the results above.
+- If no useful follow-up exists, return an empty array for follow_ups.
+- claim_node_id must be an actual node id visible in the results above, or null."""
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model="claude-opus-4-6",
-            max_tokens=256,
+            max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text.strip()
+        raw = response.content[0].text.strip()
+        _LLM_DEBUG.append({
+            "call": "plan_followups_and_answer",
+            "input": prompt,
+            "output": raw,
+        })
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+        parsed = json.loads(raw)
+        answer = parsed.get("answer", "")
+        follow_ups = [
+            fu for fu in (parsed.get("follow_ups") or [])
+            if fu.get("intent") in (
+                "claim_network", "claim_subgraph", "shared_bank",
+                "people_clusters", "business_patterns"
+            )
+        ]
+        return answer, follow_ups[:2]
+    except Exception:
+        return "", []
+
+
+def _synthesize_refined_answer(
+    question: str,
+    original_kind: str,
+    original_payload: object,
+    followup_results: list[dict],
+) -> str:
+    """
+    After executing follow-up queries, call Claude with all collected data to produce
+    a comprehensive, synthesized investigative summary.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return ""
+
+    from src.llm.prompts import QUERY_SCENARIOS
+
+    sections = [f"[Primary query — {original_kind}]\n{_payload_to_text(original_kind, original_payload)}"]
+    for i, r in enumerate(followup_results, 1):
+        fkind = r.get("kind", "unknown")
+        fpayload = r.get("payload")
+        sections.append(f"[Follow-up {i} — {fkind}]\n{_payload_to_text(fkind, fpayload)}")
+
+    all_data = "\n\n".join(sections)
+
+    prompt = f"""You are an insurance fraud investigator's assistant with deep knowledge of the InvestigAI graph system.
+
+<query_scenarios>
+{QUERY_SCENARIOS}
+</query_scenarios>
+
+The investigator asked: "{question}"
+
+All investigation data gathered (original query + {len(followup_results)} follow-up(s)):
+
+{all_data}
+
+Synthesize ALL findings into a comprehensive 2–5 sentence investigative summary.
+- Lead with the direct answer to the original question.
+- Incorporate key findings from the follow-up queries.
+- Highlight any suspicious patterns, overlaps, or anomalies across the combined data.
+- Use specific names, IDs, and values. Note any domain caveats."""
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        _LLM_DEBUG.append({
+            "call": "synthesize_refined_answer",
+            "input": prompt,
+            "output": raw,
+        })
+        return raw
     except Exception:
         return ""
 
 
+_RESULT_TYPE_COLOR = {
+    "Person": "#7eb6ff",
+    "Business": "#5cb85c",
+    "Policy": "#f0ad4e",
+    "Claim": "#d9534f",
+    "Address": "#c879ff",
+    "BankAccount": "#aaaaaa",
+}
+_RESULT_TYPE_SHAPE = {
+    "Person": "dot",
+    "Business": "square",
+    "Policy": "diamond",
+    "Claim": "star",
+    "Address": "triangleDown",
+    "BankAccount": "hexagon",
+}
+_RESULT_EDGE_COLOR = {
+    "IS_CLAIM_AGAINST_POLICY": "#d9534f",
+    "IS_COVERED_BY": "#7eb6ff",
+    "SOLD_POLICY": "#f0ad4e",
+    "LOCATED_IN": "#c879ff",
+    "HOLD_BY": "#aaaaaa",
+    "HELD_BY": "#aaaaaa",
+    "IS_SPOUSE_OF": "#ff79c6",
+    "IS_RELATED_TO": "#79c6ff",
+    "ACT_ON_BEHALF_OF": "#ffb347",
+    "HIPAA_AUTHORIZED_ON": "#90ee90",
+    "DIAGNOSED_BY": "#ff6961",
+}
+
+
+def _build_result_pyvis_html(G: nx.DiGraph, node_ids: set[str]) -> str:
+    """Build a pyvis interactive graph for the induced subgraph of result nodes."""
+    try:
+        from pyvis.network import Network
+    except ImportError:
+        return ""
+
+    valid = {n for n in node_ids if n in G}
+    if not valid:
+        return ""
+
+    net = Network(
+        height="520px",
+        width="100%",
+        directed=True,
+        bgcolor="#1a1a2e",
+        font_color="#ffffff",
+    )
+    net.barnes_hut(
+        gravity=-6000,
+        central_gravity=0.4,
+        spring_length=140,
+        spring_strength=0.05,
+        damping=0.1,
+    )
+
+    for node_id in valid:
+        data = dict(G.nodes[node_id])
+        ntype = data.get("node_type", "Unknown")
+        label = (data.get("label") or node_id)
+        if len(label) > 22:
+            label = label[:19] + "…"
+        color = _RESULT_TYPE_COLOR.get(ntype, "#dddddd")
+        shape = _RESULT_TYPE_SHAPE.get(ntype, "dot")
+
+        # Build tooltip
+        import json as _json
+        props = {}
+        raw = data.get("properties_json")
+        if raw:
+            try:
+                props = _json.loads(raw) if isinstance(raw, str) else raw
+            except Exception:
+                props = {}
+        tip_lines = [f"<b>{label}</b>", f"<i>{ntype}</i>", f"ID: {node_id}"]
+        for k, v in list(props.items())[:8]:
+            if v not in (None, "", "nan"):
+                tip_lines.append(f"{k}: {v}")
+
+        net.add_node(
+            node_id,
+            label=label,
+            title="<br>".join(tip_lines),
+            color={"background": color, "border": "#ffffff44",
+                   "highlight": {"background": "#ffffff", "border": "#ffff00"}},
+            shape=shape,
+            font={"color": "#eeeeee", "size": 13},
+            borderWidth=1,
+            size=20,
+        )
+
+    for u, v, edata in G.edges(data=True):
+        if u not in valid or v not in valid:
+            continue
+        etype = edata.get("edge_type", "")
+        ecolor = _RESULT_EDGE_COLOR.get(etype, "#888888")
+        net.add_edge(
+            u, v,
+            title=etype,
+            label=etype,
+            color=ecolor,
+            arrows="to",
+            width=1.5,
+            font={"size": 9, "color": "#cccccc", "strokeWidth": 0},
+            smooth={"type": "curvedCW", "roundness": 0.15},
+        )
+
+    net.set_options("""
+    var options = {
+      "interaction": {"hover": true, "tooltipDelay": 80,
+                      "navigationButtons": true, "keyboard": {"enabled": true}},
+      "edges": {"arrowStrikethrough": false}
+    }
+    """)
+
+    # Inject click-to-isolate + reset (same pattern as Interactive Graph page)
+    custom_js = """
+<style>
+  #res-ctrl {
+    position:absolute; top:8px; left:50%; transform:translateX(-50%);
+    z-index:999; display:flex; gap:8px; align-items:center;
+    background:rgba(20,20,40,0.85); padding:5px 14px; border-radius:20px;
+    border:1px solid #444; font-family:sans-serif; font-size:12px; color:#ddd;
+  }
+  #res-ctrl button {
+    background:#2a2a4a; color:#fff; border:1px solid #666;
+    border-radius:12px; padding:3px 12px; cursor:pointer; font-size:11px;
+  }
+  #res-ctrl button:hover { background:#4a4a8a; }
+  #res-ctrl button.active { background:#5555aa; border-color:#aaa; }
+</style>
+<div id="res-ctrl">
+  <span id="res-status">Click a node to isolate</span>
+  <button id="res-reset" onclick="resReset()">&#8635; Reset</button>
+</div>
+<script>
+  var _resIsolated = false;
+  function resNeighbourhood(id, depth) {
+    var visited = new Set([id]), frontier = [id];
+    for (var d = 0; d < depth; d++) {
+      var next = [];
+      frontier.forEach(function(n) {
+        network.getConnectedNodes(n).forEach(function(nb) {
+          if (!visited.has(nb)) { visited.add(nb); next.push(nb); }
+        });
+      });
+      frontier = next;
+    }
+    return visited;
+  }
+  function resIsolate(id) {
+    var hood = resNeighbourhood(id, 2);
+    nodes.update(nodes.getIds().map(function(i) { return {id:i, hidden:!hood.has(i)}; }));
+    edges.update(edges.getIds().map(function(i) {
+      var e = edges.get(i); return {id:i, hidden:!hood.has(e.from)||!hood.has(e.to)};
+    }));
+    _resIsolated = true;
+    document.getElementById('res-status').textContent = hood.size + ' node(s) around "' + id + '"';
+    document.getElementById('res-reset').classList.add('active');
+  }
+  function resReset() {
+    nodes.update(nodes.getIds().map(function(i) { return {id:i, hidden:false}; }));
+    edges.update(edges.getIds().map(function(i) { return {id:i, hidden:false}; }));
+    _resIsolated = false;
+    document.getElementById('res-status').textContent = 'Click a node to isolate';
+    document.getElementById('res-reset').classList.remove('active');
+  }
+  (function wait() {
+    if (typeof network === 'undefined') { setTimeout(wait, 100); return; }
+    network.on('click', function(p) {
+      if (p.nodes.length > 0) resIsolate(p.nodes[0]);
+      else if (_resIsolated) resReset();
+    });
+  })();
+</script>
+"""
+
+    with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w") as f:
+        net.save_graph(f.name)
+        html = Path(f.name).read_text()
+
+    return html.replace("</body>", custom_js + "\n</body>")
+
+
 def _render_dispatch_result(result: dict, question: str = "") -> None:
     """Full free-text result: errors, intent block, tables."""
+    _LLM_DEBUG.clear()
     decision: RouterDecision | None = result.get("decision")
     kind = result.get("kind")
     if result.get("error") and kind in (None, "error", "unknown"):
@@ -590,13 +906,110 @@ def _render_dispatch_result(result: dict, question: str = "") -> None:
 
     if question and payload is not None:
         st.divider()
+
+        # ── Phase 1: answer + identify follow-up queries ────────────────────────
+        with st.spinner("Analysing results and planning follow-up queries…"):
+            initial_answer, follow_up_specs = _plan_followups_and_answer(
+                question, str(kind), payload
+            )
+
+        # ── Phase 2: execute follow-up queries ──────────────────────────────────
+        followup_results: list[dict] = []
+        if follow_up_specs:
+            with st.spinner(f"Running {len(follow_up_specs)} follow-up quer{'y' if len(follow_up_specs)==1 else 'ies'}…"):
+                for spec in follow_up_specs:
+                    from src.llm.router import RouterDecision as _RD
+                    dec = _RD(
+                        intent=spec["intent"],
+                        claim_node_id=spec.get("claim_node_id"),
+                        source="llm",
+                        reason=spec.get("reason", ""),
+                    )
+                    r = dispatch_routed_query(dec)
+                    if not r.get("error") and r.get("payload") is not None:
+                        r["_spec"] = spec
+                        followup_results.append(r)
+
+        # ── Phase 3: synthesize refined answer ──────────────────────────────────
+        if followup_results:
+            with st.spinner("Synthesizing findings…"):
+                final_answer = _synthesize_refined_answer(
+                    question, str(kind), payload, followup_results
+                )
+        else:
+            final_answer = initial_answer
+
         st.subheader("Answer")
-        with st.spinner("Answering…"):
-            summary = _generate_nl_summary(question, str(kind), payload)
-        if summary:
-            st.info(summary)
+        if final_answer:
+            st.info(final_answer)
         else:
             st.caption("_(Answer unavailable — check ANTHROPIC_API_KEY)_")
+
+        # ── Show follow-up query results in an expander ─────────────────────────
+        if followup_results:
+            with st.expander(f"Follow-up queries run ({len(followup_results)})", expanded=False):
+                for r in followup_results:
+                    spec = r.get("_spec", {})
+                    st.markdown(f"**Intent:** `{r['kind']}` — {spec.get('reason', '')}")
+                    _render_routed_payload(str(r["kind"]), r.get("payload"))
+                    st.divider()
+
+        # ── Combined result graph (original + follow-ups) ───────────────────────
+        st.divider()
+        st.subheader("Result graph")
+        G = get_graph()
+        all_node_ids: set[str] = set()
+        for raw in _collect_node_ids_from_result(str(kind), payload):
+            if raw in G:
+                all_node_ids.add(raw)
+        for r in followup_results:
+            for raw in _collect_node_ids_from_result(str(r["kind"]), r.get("payload")):
+                if raw in G:
+                    all_node_ids.add(raw)
+
+        if all_node_ids:
+            with st.spinner("Rendering graph…"):
+                graph_html = _build_result_pyvis_html(G, all_node_ids)
+            if graph_html:
+                components.html(graph_html, height=540, scrolling=False)
+            else:
+                st.caption("_(Graph unavailable — pyvis not installed)_")
+        else:
+            st.caption("_(No matching graph nodes found for this result)_")
+
+        # ── Debug: raw LLM I/O ──────────────────────────────────────────────────
+        st.divider()
+        routing_debug = dict(_router_mod.last_routing_debug)
+        all_debug = []
+        if routing_debug:
+            all_debug.append({"call": "intent_router", **routing_debug})
+        all_debug.extend(_LLM_DEBUG)
+
+        with st.expander(f"Debug: raw LLM inputs & outputs ({len(all_debug)} call(s))", expanded=False):
+            for i, entry in enumerate(all_debug, 1):
+                call_name = entry.get("call", f"call_{i}")
+                st.markdown(f"### Call {i}: `{call_name}`")
+
+                if call_name == "intent_router":
+                    st.markdown("**System prompt** (intent router):")
+                    st.code(entry.get("system_prompt", ""), language="text")
+                    st.markdown("**Messages sent** (few-shot examples + user question):")
+                    msgs = entry.get("messages", [])
+                    # Show only the last user message to keep it readable; full list below
+                    user_msgs = [m for m in msgs if m.get("role") == "user"]
+                    if user_msgs:
+                        st.markdown(f"*Last user message (of {len(msgs)} total including few-shots):*")
+                        st.code(user_msgs[-1].get("content", ""), language="text")
+                    st.markdown("**Raw response:**")
+                    st.code(entry.get("raw_response", ""), language="json")
+                else:
+                    st.markdown("**Input prompt:**")
+                    st.code(entry.get("input", ""), language="text")
+                    st.markdown("**Raw output:**")
+                    st.code(entry.get("output", ""), language="text")
+
+                if i < len(all_debug):
+                    st.divider()
 
 
 def main() -> None:

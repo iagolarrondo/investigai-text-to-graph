@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# ── Load all domain docs from docs/Original docs/ ────────────────────────────
+# ── Load domain context ───────────────────────────────────────────────────────
 
 _DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "docs" / "Original docs"
+_SCENARIOS_FILE = Path(__file__).resolve().parent.parent.parent / "docs" / "LLM_GRAPH_QUERY_SCENARIOS.md"
 
 
 def _load_domain_docs() -> str:
@@ -27,7 +28,15 @@ def _load_domain_docs() -> str:
     return "\n\n".join(parts)
 
 
+def _load_query_scenarios() -> str:
+    """Load the LLM graph query scenarios document."""
+    if not _SCENARIOS_FILE.is_file():
+        return ""
+    return _SCENARIOS_FILE.read_text(encoding="utf-8", errors="ignore").strip()
+
+
 DOMAIN_DOCS = _load_domain_docs()
+QUERY_SCENARIOS = _load_query_scenarios()
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
@@ -38,6 +47,12 @@ Below is the full domain knowledge for this system — data tables, relationship
 <domain_knowledge>
 {DOMAIN_DOCS}
 </domain_knowledge>
+
+The following document defines the full query scenario taxonomy for this system — intent types, node traversal patterns, identifier conventions, edge cases, and expected response structure. Use it to correctly interpret investigator questions, especially ambiguous or multi-hop ones.
+
+<query_scenarios>
+{QUERY_SCENARIOS}
+</query_scenarios>
 
 Your task: map the user's investigation question to exactly ONE of these graph query intents:
 
