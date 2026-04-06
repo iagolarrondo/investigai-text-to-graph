@@ -3,7 +3,6 @@
 from src.llm.prompts import (
     FEW_SHOT_EXAMPLES,
     SYSTEM_INTENT_ROUTER,
-    USER_QUESTION_TEMPLATE,
 )
 from src.llm.router import (
     RouterDecision,
@@ -17,7 +16,6 @@ from src.llm.router import (
 __all__ = [
     "FEW_SHOT_EXAMPLES",
     "SYSTEM_INTENT_ROUTER",
-    "USER_QUESTION_TEMPLATE",
     "RouterDecision",
     "dispatch_routed_query",
     "route_question",

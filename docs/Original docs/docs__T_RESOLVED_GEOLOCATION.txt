@@ -1,0 +1,1 @@
+Each record in T_RESOLVED_GEOLOCATION corresponds to a geolocation for which a care session has occurred. This table can be joined with other tables through RES_GEOLOCATION_ID key.

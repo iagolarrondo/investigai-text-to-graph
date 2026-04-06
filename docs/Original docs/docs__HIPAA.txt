@@ -1,0 +1,2 @@
+To get a HIPAA person for a policyholder (someone who has access to policyholder's health records), T_RESOLVED_PERSON_PERSON_CROSSWALK table can be used.
+RES_PERSON_ID_SRC has HIPAA authorization for RES_PERSON_ID_TGT if the EDGE_NAME is 'HIPAA_AUTHORIZED_ON'.

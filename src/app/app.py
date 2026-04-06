@@ -19,15 +19,23 @@ If Streamlit cannot import ``src``, set PYTHONPATH to the project root::
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
 
+import anthropic
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import networkx as nx
 import pandas as pd
 import streamlit as st
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+except ImportError:
+    pass
 
 # --- Make ``src.*`` importable when running ``streamlit run src/app/app.py`` ---
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -35,10 +43,6 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.graph_query.query_graph import (  # noqa: E402
-    find_business_connection_patterns,
-    find_shared_bank_accounts,
-    get_claim_network,
-    get_claim_subgraph_summary,
     get_graph,
     load_graph,
     summarize_graph,
@@ -54,51 +58,6 @@ _NODE_ID_IN_TEXT = re.compile(
     r"\b(?:person|claim|policy|bank|business|address)_[A-Za-z0-9.-]+\b"
 )
 
-# Dropdown labels (aligned with docs/poc_v1_demo_questions.md)
-Q_AGENT_CLAIMANT = (
-    "1. Is anyone both selling the policy and claiming on it? "
-    "(demo: claim_C9000000002 — Maria)"
-)
-Q_POLICY_CONCENTRATION = (
-    "2. Which policies have multiple claims on them? "
-    "(demo: view via claim_C9000000001 → same policy)"
-)
-Q_SHARED_BANK = "3. Do any people share a bank account but live at different addresses?"
-Q_BUSINESS_COLOC = (
-    "4. Is a business at the same address as multiple people? "
-    "(provider / colocation)"
-)
-Q_CLAIM_SUBGRAPH = (
-    "5. N-hop neighborhood around a claim — who is nearby in the link chart? "
-    "(demo: claim_C9000000005 — Pat / Apex billing story, depth 4)"
-)
-
-# Short copy: which ``query_graph`` function backs each routed intent
-PROTOTYPE_QUERY_HELP: dict[str, str] = {
-    "claim_network": (
-        "**Prototype query:** `query_graph.get_claim_network(claim_node_id)` — "
-        "claim row, linked policy(ies), other claims on that policy, people linked "
-        "to the policy (`IS_COVERED_BY`, `SOLD_POLICY`), and claimant ↔ person match."
-    ),
-    "shared_bank": (
-        "**Prototype query:** `query_graph.find_shared_bank_accounts()` — "
-        "bank accounts with two or more `HOLD_BY` people and whether their "
-        "`LOCATED_IN` addresses differ."
-    ),
-    "people_clusters": (
-        "**Prototype query:** `query_graph.find_related_people_clusters()` — "
-        "connected components over Person→Person edges (spouse, related-to, …)."
-    ),
-    "business_patterns": (
-        "**Prototype query:** `query_graph.find_business_connection_patterns()` — "
-        "each business’s address and people who share that address (`LOCATED_IN`)."
-    ),
-    "claim_subgraph": (
-        "**Prototype query:** `query_graph.get_claim_subgraph_summary(claim_node_id, max_depth=…)` — "
-        "all entities within **N undirected hops** of the claim, counts by type, plus node/edge lists "
-        "(router uses depth **4** on this demo graph so colocated billing appears)."
-    ),
-}
 
 # Colors for matplotlib (match notebook spirit)
 _TYPE_COLOR = {
@@ -124,10 +83,12 @@ _CLAIM_TABLE_KEYS = (
 )
 
 
-@st.cache_resource
 def _ensure_graph_loaded() -> bool:
-    """Load CSV graph once per app session (Streamlit reruns reuse cache)."""
-    load_graph()
+    """Load CSV graph if not already in memory."""
+    try:
+        get_graph()
+    except RuntimeError:
+        load_graph()
     return True
 
 
@@ -538,13 +499,68 @@ def _show_router_decision(decision: RouterDecision) -> None:
     if decision.matched_keywords:
         st.caption("Matched keywords: " + ", ".join(decision.matched_keywords))
 
-    help_text = PROTOTYPE_QUERY_HELP.get(decision.intent)
-    if help_text:
-        st.markdown("---")
-        st.markdown(help_text)
 
 
-def _render_dispatch_result(result: dict) -> None:
+def _payload_to_text(kind: str, payload: object) -> str:
+    """Serialise query results to a compact text block for the LLM."""
+    lines: list[str] = []
+
+    def _df_summary(label: str, df: pd.DataFrame) -> None:
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            lines.append(f"{label}: (empty)")
+            return
+        lines.append(f"{label} ({len(df)} row(s)):")
+        lines.append(df.to_string(index=False, max_rows=30))
+
+    if kind == "claim_network" and isinstance(payload, dict):
+        for key in ("claim", "linked_policies", "other_claims_on_policy",
+                    "people_linked_to_policy", "claimant_person_match"):
+            _df_summary(key.replace("_", " ").title(), payload.get(key))
+    elif kind == "claim_subgraph" and isinstance(payload, dict):
+        tc = payload.get("type_counts")
+        if isinstance(tc, pd.DataFrame):
+            lines.append("Type counts:\n" + tc.to_string(index=False))
+        _df_summary("Nodes", payload.get("nodes"))
+        _df_summary("Edges", payload.get("edges"))
+    elif isinstance(payload, dict) and "table" in payload:
+        _df_summary("Results", payload.get("table"))
+    elif isinstance(payload, pd.DataFrame):
+        _df_summary("Results", payload)
+
+    return "\n".join(lines) if lines else "(no data)"
+
+
+def _generate_nl_summary(question: str, kind: str, payload: object) -> str:
+    """Call Claude to produce a direct, concise answer to the investigator's question."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return ""
+
+    results_text = _payload_to_text(kind, payload)
+
+    prompt = f"""You are an insurance fraud investigator's assistant.
+
+The investigator asked: "{question}"
+
+Graph query results:
+{results_text}
+
+Answer the question directly and concisely in 1–3 sentences using only what the results show.
+Use specific names, IDs, and values from the data. If the results show nothing suspicious, say so plainly."""
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text.strip()
+    except Exception:
+        return ""
+
+
+def _render_dispatch_result(result: dict, question: str = "") -> None:
     """Full free-text result: errors, intent block, tables."""
     decision: RouterDecision | None = result.get("decision")
     kind = result.get("kind")
@@ -572,69 +588,15 @@ def _render_dispatch_result(result: dict) -> None:
 
     _render_routed_payload(str(kind), payload)
 
-
-def _run_demo_question(choice: str) -> None:
-    """Predefined demos: fixed calls (router not used)."""
-    st.caption(
-        "_Predefined demos call `query_graph` directly with fixed arguments "
-        "(the rule-based router is not used for this path)._"
-    )
-    if choice == Q_AGENT_CLAIMANT:
-        st.markdown(
-            "**Query:** `get_claim_network('claim_C9000000002')` — shows policy, "
-            "other claims, people tied to the policy (including `SOLD_POLICY`), "
-            "and claimant ↔ person match."
-        )
-        payload = get_claim_network("claim_C9000000002")
-        _render_claim_network_tables(payload)
-        _display_subgraph_section("claim_network", payload)
-
-    elif choice == Q_POLICY_CONCENTRATION:
-        st.markdown(
-            "**Query:** `get_claim_network('claim_C9000000001')` — any claim on the "
-            "busy policy lists **other claims on the same policy** in "
-            "`other_claims_on_policy` (plus the linked policy row)."
-        )
-        st.info(
-            "On the synthetic seed, **POL-LTC-10001** should show **two** other open "
-            "claims in the table below (three open claims total including this one)."
-        )
-        result = get_claim_network("claim_C9000000001")
-        _render_claim_network_tables(result)
-        _display_subgraph_section("claim_network", result)
-
-    elif choice == Q_SHARED_BANK:
-        st.markdown("**Query:** `find_shared_bank_accounts()`")
-        out = find_shared_bank_accounts()
-        _render_tabular_investigation(
-            out,
-            empty_warning="No bank account has two or more holders in this graph.",
-        )
-        _display_subgraph_section("shared_bank", out)
-
-    elif choice == Q_BUSINESS_COLOC:
-        st.markdown("**Query:** `find_business_connection_patterns()`")
-        out = find_business_connection_patterns()
-        _render_tabular_investigation(
-            out,
-            empty_warning="No business/person colocation rows for this graph.",
-        )
-        _display_subgraph_section("business_patterns", out)
-
-    elif choice == Q_CLAIM_SUBGRAPH:
-        st.markdown(
-            "**Query:** `get_claim_subgraph_summary('claim_C9000000005', max_depth=4)` — "
-            "every entity within **four undirected hops** of the claim (link-chart distance), "
-            "with **counts by type** and full node/edge lists. On the synthetic seed this "
-            "reaches policy, both people, shared bank, Lynn suite address, and **APEX MEDICAL BILLING**."
-        )
-        st.caption(
-            "The function default is `max_depth=2` for a tight slice; this demo uses **4** so "
-            "the billing colocation is inside the neighborhood."
-        )
-        sg = get_claim_subgraph_summary("claim_C9000000005", max_depth=4)
-        _render_claim_subgraph_tables(sg)
-        _display_subgraph_section("claim_subgraph", sg)
+    if question and payload is not None:
+        st.divider()
+        st.subheader("Answer")
+        with st.spinner("Answering…"):
+            summary = _generate_nl_summary(question, str(kind), payload)
+        if summary:
+            st.info(summary)
+        else:
+            st.caption("_(Answer unavailable — check ANTHROPIC_API_KEY)_")
 
 
 def main() -> None:
@@ -644,23 +606,7 @@ def main() -> None:
         layout="wide",
     )
 
-    st.title("InvestigAI — graph prototype (PoC v1)")
-    st.markdown(
-        """
-        This app loads the **investigation graph** from `data/processed/nodes.csv` and
-        `edges.csv`. Build those files first with:
-
-        `python src/graph_build/build_graph_files.py`
-
-        **Either** pick a predefined demo **or** type your own question. Free-text
-        questions are mapped with the **rule-based router** in `src/llm/router.py`
-        (`route_question_rules` → `dispatch_routed_query`).
-
-        Each answer includes a short **why this matters** explanation, **which graph
-        links** support it (node ids), the **data tables**, then a **subgraph** zoom-in
-        with a small diagram.
-        """
-    )
+    st.title("InvestigAI")
 
     try:
         _ensure_graph_loaded()
@@ -668,75 +614,37 @@ def main() -> None:
         st.error(str(e))
         st.stop()
 
-    st.divider()
-    st.header("Graph summary")
     summary = summarize_graph()
     c1, c2, c3 = st.columns(3)
     c1.metric("Nodes", summary["num_nodes"])
     c2.metric("Edges", summary["num_edges"])
     c3.metric("Directed", "yes" if summary["is_directed"] else "no")
 
-    with st.expander("Node types (counts)", expanded=False):
-        st.json(summary["node_types"])
-    with st.expander("Edge types (counts)", expanded=False):
-        st.json(summary["edge_types"])
-
     st.divider()
-    st.header("Investigation questions")
 
-    mode = st.radio(
-        "How do you want to ask?",
-        options=["Predefined demo", "Free-text question (router)"],
-        horizontal=True,
-        help="Predefined = fixed graph demos. Free-text = keyword router to five query types.",
+    question = st.text_area(
+        "Ask an investigation question",
+        placeholder=(
+            "e.g. Did the writing agent also file a claim? | "
+            "Who shares a bank account at different addresses? | "
+            "Show family and spouse clusters | "
+            "Is any ICP checking in far from the policyholder address?"
+        ),
+        height=90,
+        key="free_text_question",
     )
+    run = st.button("Run query", type="primary")
 
-    st.divider()
-
-    if mode == "Predefined demo":
-        choice = st.selectbox(
-            "Pick a demo question",
-            options=[
-                Q_AGENT_CLAIMANT,
-                Q_POLICY_CONCENTRATION,
-                Q_SHARED_BANK,
-                Q_BUSINESS_COLOC,
-                Q_CLAIM_SUBGRAPH,
-            ],
-            index=0,
-        )
-        st.subheader("Result")
-        _run_demo_question(choice)
-
-    else:
-        st.markdown(
-            "Type a question in plain English. The app uses **keyword scoring** "
-            "(no LLM) to pick one of: `claim_network`, `claim_subgraph`, `shared_bank`, "
-            "`people_clusters`, or `business_patterns`."
-        )
-        question = st.text_area(
-            "Your question",
-            placeholder=(
-                "Examples: Who shares a bank account? | Show family clusters | "
-                "Did Maria sell the policy she claimed on? | "
-                "Is the HHCA at the same address as claimants? | "
-                "2-hop neighborhood around claim_C9000000005"
-            ),
-            height=100,
-            key="free_text_question",
-        )
-        run = st.button("Run query", type="primary")
-
-        if run:
-            q = (question or "").strip()
-            if not q:
-                st.warning("Enter a question, then click **Run query**.")
-            else:
-                decision = route_question_rules(q)
-                result = dispatch_routed_query(decision)
-                _render_dispatch_result(result)
+    if run:
+        q = (question or "").strip()
+        if not q:
+            st.warning("Enter a question, then click **Run query**.")
         else:
-            st.caption("Click **Run query** after typing your question.")
+            decision = route_question_rules(q)
+            result = dispatch_routed_query(decision)
+            _render_dispatch_result(result, question=q)
+    elif not question:
+        st.caption("Type a question above and click **Run query**.")
 
 
 if __name__ == "__main__":

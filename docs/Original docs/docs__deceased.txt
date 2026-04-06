@@ -1,0 +1,2 @@
+If you are asked whether a person is deceased or not, generate a query that checks whether DECEASED_IND is 1 for that
+person, and return the DEATH_DATE information as well if available.

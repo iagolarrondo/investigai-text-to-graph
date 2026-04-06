@@ -1,0 +1,5 @@
+Each record in T_RESOLVED_BUSINESS corresponds to a business entity. RES_BUSINESS_ID is the primary key for T_RESOLVED_BUSINESS, other tables can be
+joined via RES_BUSINESS_ID key.
+
+DUNS_NUMBER is the D&B (Dun and Brandstreet) number for the business.
+BUSINESS_TYPE is the type of business. Possible values of BUSINESS_TYPE are: 'NH' for nursing homes, 'HHCA' for home healthcare agencies, 'ALF' for assisted living facilities 'Insurance Agency' for businesses who sell policies, 'Medical Care Provider', 'Other Provider' and 'External Vendor'.

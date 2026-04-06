@@ -1,0 +1,14 @@
+Each entry in T_RESOLVED_BUSINESS_INVOICE_CROSSWALK corresponds to a relationship between a business (identified by RES_BUSINESS_ID) and an invoice (identified by NORM_INVOICE_ID).
+The EDGE_NAME column identifies the type of relationship. It can only have the following value:
+- PROVIDED_CARE_ON_INVOICE: The business was the care provider for the given invoice.
+
+Use this table to find all invoices submitted by a particular provider agency or care facility,
+or to identify the business entity behind a given invoice.
+
+For invoices submitted by individual caregivers (ICPs) rather than business entities,
+use T_RESOLVED_PERSON_INVOICE_CROSSWALK instead.
+
+Join path:
+  T_NORM_INVOICE
+    -> T_RESOLVED_BUSINESS_INVOICE_CROSSWALK on NORM_INVOICE_ID
+    -> T_RESOLVED_BUSINESS on RES_BUSINESS_ID

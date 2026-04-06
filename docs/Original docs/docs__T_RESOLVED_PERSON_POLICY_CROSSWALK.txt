@@ -1,0 +1,5 @@
+Each entry in T_RESOLVED_PERSON_POLICY_CROSSWALK corresponds to a relationship between a person (RES_PERSON_ID) and policy (POLICY_NUMBER).
+
+EDGE_NAME specifies the type of relation, there are two possible options:
+- 'IS_COVERED_BY': Person is the policyholder for the policy identified by POLICY_NUMBER.
+- 'SOLD_POLICY': Person sold the policy identified by POLICY_NUMBER. The person is the writing agent for that policy.

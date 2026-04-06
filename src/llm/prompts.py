@@ -1,75 +1,88 @@
 """
-Prompt text and templates for **future** LLM-based intent routing.
+Prompts and domain context loader for Claude-based intent routing.
 
-The prototype uses a **rule-based** router in ``router.py`` so you can run the
-pipeline without API keys. When you add an LLM:
-
-1. Build a short system + user message from the constants below (or revise them).
-2. Ask the model to output **structured JSON** matching ``RouterDecision`` fields
-   (see ``router.py``): ``intent``, optional ``claim_node_id``, short ``reason``.
-3. Parse JSON and validate against allowed ``intent`` values.
-
----
-
-How this fits the **final product** (high level):
-
-- **InvestigAI** front end (chat or search box) sends the user's natural language
-  question to a **router** stage.
-- That stage either uses **rules** (cheap, predictable demos) or an **LLM**
-  (flexible wording, multi-intent hints) to pick a **structured intent**.
-- A **dispatcher** then calls the right graph function(s), optionally composes
-  follow-up queries, and passes tabular results to **explanation / reporting**
-  (another LLM call or templates).
-
-Keep prompts **small** and **schema-focused** so the model does classification,
-not free-form investigation (which belongs after you have query results).
+The domain docs in docs/Original docs/ are loaded once at import time and
+baked into the system prompt so Claude understands the full data model and
+fraud investigation patterns before classifying any question.
 """
 
 from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# Future LLM: system message (classification only)
-# ---------------------------------------------------------------------------
-# Tweak tool names / intents here when you add new graph queries.
+from pathlib import Path
 
-SYSTEM_INTENT_ROUTER = """You are a classifier for an insurance investigation graph prototype.
+# ── Load all domain docs from docs/Original docs/ ────────────────────────────
 
-Map the user's question to exactly ONE intent label from this list:
-- claim_network — questions about a specific claim, its policy, other claims on that policy, people tied to the policy (insured, agent), or claimant identity.
-- shared_bank — questions about people sharing bank accounts, payment diversion, different addresses for same account.
-- people_clusters — questions about family, spouses, relatives, or social clusters in the graph.
-- business_patterns — questions about businesses, providers, agencies, or sharing an address with people.
+_DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "docs" / "Original docs"
 
-Also extract a claim node id if the user gives one like claim_C9000000002 (optional).
 
-Respond with JSON only, no markdown:
-{"intent": "<label>", "claim_node_id": "<string or null>", "reason": "<one short sentence>"}
+def _load_domain_docs() -> str:
+    """Concatenate all .txt files in docs/Original docs/ into one context block."""
+    if not _DOCS_DIR.is_dir():
+        return ""
+    parts: list[str] = []
+    for path in sorted(_DOCS_DIR.glob("*.txt")):
+        content = path.read_text(encoding="utf-8", errors="ignore").strip()
+        if content:
+            parts.append(f"### {path.stem}\n{content}")
+    return "\n\n".join(parts)
+
+
+DOMAIN_DOCS = _load_domain_docs()
+
+# ── System prompt ─────────────────────────────────────────────────────────────
+
+SYSTEM_INTENT_ROUTER = f"""You are an intent classifier for an insurance fraud investigation graph tool called InvestigAI.
+
+Below is the full domain knowledge for this system — data tables, relationships, fraud patterns, and query logic used by investigators. Read and understand it before classifying any question.
+
+<domain_knowledge>
+{DOMAIN_DOCS}
+</domain_knowledge>
+
+Your task: map the user's investigation question to exactly ONE of these graph query intents:
+
+- claim_network     : questions about a specific claim, its policy, other claims on that policy,
+                      who sold/wrote the policy, whether the writing agent is also a claimant,
+                      or claimant identity overlap with policy parties.
+
+- claim_subgraph    : questions about the N-hop neighbourhood / link chart around a claim node —
+                      "who is nearby", "what entities surround this claim", "n-hop", "neighbourhood",
+                      "what is connected to claim X within N hops".
+
+- shared_bank       : questions about people sharing bank accounts, payment diversion,
+                      joint accounts, or account holders living at different addresses.
+
+- people_clusters   : questions about family, spouses, relatives, POA, HIPAA authorization,
+                      social clusters, or connected components of people. Also covers ICP/caregiver
+                      overlap, shared device IDs, and multi-ICP work period questions.
+
+- business_patterns : questions about businesses, providers, ICPs, agencies sharing an address
+                      with policyholders, provider colocation, session distance anomalies,
+                      geolocation check-in/check-out issues, invoice patterns, or care session
+                      listings where a provider's location is suspicious.
+
+If the user's question mentions a specific node ID (e.g. "claim_C001", "Claim|C001", "POL001"),
+extract it as claim_node_id when it refers to a claim. Otherwise set claim_node_id to null.
+
+Respond with valid JSON only — no markdown, no explanation outside the JSON:
+{{"intent": "<label>", "claim_node_id": "<string or null>", "reason": "<one short sentence>"}}
 """
 
-# ---------------------------------------------------------------------------
-# Future LLM: user message template
-# ---------------------------------------------------------------------------
+# ── Few-shot examples ─────────────────────────────────────────────────────────
 
-USER_QUESTION_TEMPLATE = """User question:
-{question}
-"""
-
-# ---------------------------------------------------------------------------
-# Few-shot examples (optional — enable when you wire the API)
-# ---------------------------------------------------------------------------
-# Paste into the system message or as separate assistant/user turns.
-
-FEW_SHOT_EXAMPLES = """
-Examples:
-Q: "Did Maria sell the policy she claimed on?"
-A: {"intent": "claim_network", "claim_node_id": "claim_C9000000002", "reason": "claim and agent overlap"}
-
-Q: "Who shares a bank account but lives somewhere else?"
-A: {"intent": "shared_bank", "claim_node_id": null, "reason": "shared account and addresses"}
-
-Q: "Show me family clusters"
-A: {"intent": "people_clusters", "claim_node_id": null, "reason": "family grouping"}
-
-Q: "Is the home health business at the same address as claimants?"
-A: {"intent": "business_patterns", "claim_node_id": null, "reason": "business colocation"}
-"""
+FEW_SHOT_EXAMPLES = [
+    {"role": "user",     "content": "Did the writing agent who sold the policy also file a claim on it?"},
+    {"role": "assistant","content": '{"intent": "claim_network", "claim_node_id": null, "reason": "overlap between policy writing agent and claimant"}'},
+    {"role": "user",     "content": "Who shares a bank account but lives at a different address?"},
+    {"role": "assistant","content": '{"intent": "shared_bank", "claim_node_id": null, "reason": "joint account holders at different addresses"}'},
+    {"role": "user",     "content": "Show me family and spouse clusters, including POA relationships"},
+    {"role": "assistant","content": '{"intent": "people_clusters", "claim_node_id": null, "reason": "social cluster of related people including POA"}'},
+    {"role": "user",     "content": "Is any ICP or provider checking in far from the policyholder's address?"},
+    {"role": "assistant","content": '{"intent": "business_patterns", "claim_node_id": null, "reason": "session geolocation distance anomaly"}'},
+    {"role": "user",     "content": "What entities are within 3 hops of claim_C001?"},
+    {"role": "assistant","content": '{"intent": "claim_subgraph", "claim_node_id": "claim_C001", "reason": "N-hop neighbourhood around a specific claim"}'},
+    {"role": "user",     "content": "Do ICP Jane Smith and ICP Bob Jones have overlapping work dates on claim C9000000002?"},
+    {"role": "assistant","content": '{"intent": "people_clusters", "claim_node_id": "claim_C9000000002", "reason": "multi-ICP overlapping work period analysis"}'},
+    {"role": "user",     "content": "Show me all care sessions where check-in was more than 5 miles from the policyholder address"},
+    {"role": "assistant","content": '{"intent": "business_patterns", "claim_node_id": null, "reason": "session check-in distance exceeds threshold"}'},
+]

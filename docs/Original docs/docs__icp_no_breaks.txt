@@ -1,0 +1,34 @@
+# ICP Work Blocks and No-Break Analysis
+
+## Understanding Work Blocks
+
+Each row in INVESTIGAI_ICP_WORK_BLOCKS represents a **continuous work block** where an ICP worked consecutively without any gaps (no full days off within that block).
+
+## Key Distinction: No-Break Queries vs Total Days Worked
+
+### When Asked About "No Breaks" or "Consecutive Days":
+**DO NOT SUM** the NUM_DAYS_WORKED column. Instead, return all work blocks as separate rows.
+
+**Examples of no-break queries:**
+- "How many days with no breaks did ICP work?"
+- "How many consecutive days did ICP work?"
+- "Show me the ICP's no-break periods"
+- "What are the continuous work blocks?"
+
+**Correct approach:** Return each work block separately showing START_DATE, END_DATE, and NUM_DAYS_WORKED for each block.
+
+### When Asked About "Total Days Worked":
+**DO SUM** when specifically asked for total/aggregate days across all periods.
+
+**Examples of total days queries:**
+- "How many total days did ICP work?"
+- "What is the total number of days worked?"
+- "Sum up all days the ICP worked"
+
+**Correct approach:** Use SUM() to aggregate across all work blocks.
+
+## LIFEPRO System Check
+
+**IMPORTANT:** Before using INVESTIGAI_ICP_WORK_BLOCKS, you MUST check if the claim uses the LIFEPRO system:
+
+If CLAIM_SYSTEM = 'LIFEPRO', return a message indicating that no-break analysis cannot be performed because LIFEPRO claims lack charge data in T_NORM_CHARGE.

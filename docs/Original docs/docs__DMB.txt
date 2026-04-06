@@ -1,0 +1,3 @@
+If you are asked about daily maximum benefit (DMB) for a claim, you can use T_NORM_POLICY as following:
+1. ICP_DMB, HHC_DMB, ALF_DMB and NH_DMB fields have DMB for different care settings.
+2. If DMB fields above are empty, try checking MMB (monthly maximum benefit) fields: ICP_MMB, HHC_MMB, NH_MMB, ALF_MMB.

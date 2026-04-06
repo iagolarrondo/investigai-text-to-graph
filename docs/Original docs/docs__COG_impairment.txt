@@ -1,0 +1,5 @@
+Always use the most recent review record for a given CLAIM_ID, identified by the MAX(START_DATE),
+to determine current cognitive impairment status.
+
+The MMSE_SCORE column (0–30) can be used as a corroborating signal: scores of 23 or below
+are generally associated with cognitive impairment.

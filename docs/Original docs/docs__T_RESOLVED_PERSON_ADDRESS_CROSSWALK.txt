@@ -1,0 +1,2 @@
+Each record in T_RESOLVED_PERSON_ADDRESS_CROSSWALK correspond to a person (RES_PERSON_ID) located in an address record (RES_ADDRESS_ID).
+The possible values for EDGE_NAME is 'LOCATED_IN'.

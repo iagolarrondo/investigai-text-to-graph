@@ -1,31 +1,149 @@
-edge_id,source_node_id,target_node_id,edge_type,source_table,properties_json
-e_000000,person_5001,address_9001,LOCATED_IN,T_RESOLVED_PERSON_ADDRESS_CROSSWALK,"{""RES_PERSON_ID"": 5001, ""EDGE_NAME"": ""LOCATED_IN"", ""EFFECTIVE_DATE"": ""2020-01-01"", ""IS_LATEST_ADDRESS_IND"": 1, ""RES_ADDRESS_ID"": 9001}"
-e_000001,person_5002,address_9001,LOCATED_IN,T_RESOLVED_PERSON_ADDRESS_CROSSWALK,"{""RES_PERSON_ID"": 5002, ""EDGE_NAME"": ""LOCATED_IN"", ""EFFECTIVE_DATE"": ""2020-01-01"", ""IS_LATEST_ADDRESS_IND"": 1, ""RES_ADDRESS_ID"": 9001}"
-e_000002,person_5003,address_9001,LOCATED_IN,T_RESOLVED_PERSON_ADDRESS_CROSSWALK,"{""RES_PERSON_ID"": 5003, ""EDGE_NAME"": ""LOCATED_IN"", ""EFFECTIVE_DATE"": ""2023-06-15"", ""IS_LATEST_ADDRESS_IND"": 1, ""RES_ADDRESS_ID"": 9001}"
-e_000003,person_5004,address_9001,LOCATED_IN,T_RESOLVED_PERSON_ADDRESS_CROSSWALK,"{""RES_PERSON_ID"": 5004, ""EDGE_NAME"": ""LOCATED_IN"", ""EFFECTIVE_DATE"": ""2022-03-01"", ""IS_LATEST_ADDRESS_IND"": 1, ""RES_ADDRESS_ID"": 9001}"
-e_000004,person_5005,address_9002,LOCATED_IN,T_RESOLVED_PERSON_ADDRESS_CROSSWALK,"{""RES_PERSON_ID"": 5005, ""EDGE_NAME"": ""LOCATED_IN"", ""EFFECTIVE_DATE"": ""2021-08-01"", ""IS_LATEST_ADDRESS_IND"": 1, ""RES_ADDRESS_ID"": 9002}"
-e_000005,person_5006,address_9004,LOCATED_IN,T_RESOLVED_PERSON_ADDRESS_CROSSWALK,"{""RES_PERSON_ID"": 5006, ""EDGE_NAME"": ""LOCATED_IN"", ""EFFECTIVE_DATE"": ""2023-02-01"", ""IS_LATEST_ADDRESS_IND"": 1, ""RES_ADDRESS_ID"": 9004}"
-e_000006,person_5007,address_9004,LOCATED_IN,T_RESOLVED_PERSON_ADDRESS_CROSSWALK,"{""RES_PERSON_ID"": 5007, ""EDGE_NAME"": ""LOCATED_IN"", ""EFFECTIVE_DATE"": ""2023-02-01"", ""IS_LATEST_ADDRESS_IND"": 1, ""RES_ADDRESS_ID"": 9004}"
-e_000007,business_7001,address_9001,LOCATED_IN,T_RESOLVED_BUSINESS_ADDRESS_CROSSWALK,"{""RES_BUSINESS_ID"": 7001, ""RES_ADDRESS_ID"": 9001}"
-e_000008,business_7002,address_9003,LOCATED_IN,T_RESOLVED_BUSINESS_ADDRESS_CROSSWALK,"{""RES_BUSINESS_ID"": 7002, ""RES_ADDRESS_ID"": 9003}"
-e_000009,business_7003,address_9004,LOCATED_IN,T_RESOLVED_BUSINESS_ADDRESS_CROSSWALK,"{""RES_BUSINESS_ID"": 7003, ""RES_ADDRESS_ID"": 9004}"
-e_000010,person_5001,person_5002,IS_SPOUSE_OF,T_RESOLVED_PERSON_PERSON_CROSSWALK,"{""RES_PERSON_ID_SRC"": 5001, ""EDGE_NAME"": ""IS_SPOUSE_OF"", ""EDGE_DETAIL"": null, ""EDGE_DETAIL_DSC"": null, ""RES_PERSON_ID_TGT"": 5002}"
-e_000011,person_5002,person_5004,IS_RELATED_TO,T_RESOLVED_PERSON_PERSON_CROSSWALK,"{""RES_PERSON_ID_SRC"": 5002, ""EDGE_NAME"": ""IS_RELATED_TO"", ""EDGE_DETAIL"": ""COUSIN"", ""EDGE_DETAIL_DSC"": ""FAMILY"", ""RES_PERSON_ID_TGT"": 5004}"
-e_000012,person_5003,person_5001,IS_RELATED_TO,T_RESOLVED_PERSON_PERSON_CROSSWALK,"{""RES_PERSON_ID_SRC"": 5003, ""EDGE_NAME"": ""IS_RELATED_TO"", ""EDGE_DETAIL"": ""SISTER"", ""EDGE_DETAIL_DSC"": ""FAMILY"", ""RES_PERSON_ID_TGT"": 5001}"
-e_000013,person_5006,person_5007,IS_RELATED_TO,T_RESOLVED_PERSON_PERSON_CROSSWALK,"{""RES_PERSON_ID_SRC"": 5006, ""EDGE_NAME"": ""IS_RELATED_TO"", ""EDGE_DETAIL"": ""BUSINESS_PARTNER"", ""EDGE_DETAIL_DSC"": ""FAMILY"", ""RES_PERSON_ID_TGT"": 5007}"
-e_000014,person_5001,policy_POL-LTC-10001,IS_COVERED_BY,T_RESOLVED_PERSON_POLICY_CROSSWALK,"{""RES_PERSON_ID"": 5001, ""EDGE_NAME"": ""IS_COVERED_BY"", ""EDGE_DETAIL"": null, ""EDGE_DETAIL_DSC"": null, ""POLICY_NUMBER"": ""POL-LTC-10001""}"
-e_000015,person_5002,policy_POL-LTC-10001,IS_COVERED_BY,T_RESOLVED_PERSON_POLICY_CROSSWALK,"{""RES_PERSON_ID"": 5002, ""EDGE_NAME"": ""IS_COVERED_BY"", ""EDGE_DETAIL"": null, ""EDGE_DETAIL_DSC"": null, ""POLICY_NUMBER"": ""POL-LTC-10001""}"
-e_000016,person_5002,policy_POL-LTC-10002,IS_COVERED_BY,T_RESOLVED_PERSON_POLICY_CROSSWALK,"{""RES_PERSON_ID"": 5002, ""EDGE_NAME"": ""IS_COVERED_BY"", ""EDGE_DETAIL"": null, ""EDGE_DETAIL_DSC"": null, ""POLICY_NUMBER"": ""POL-LTC-10002""}"
-e_000017,person_5003,policy_POL-LTC-10001,SOLD_POLICY,T_RESOLVED_PERSON_POLICY_CROSSWALK,"{""RES_PERSON_ID"": 5003, ""EDGE_NAME"": ""SOLD_POLICY"", ""EDGE_DETAIL"": ""WRITING_AGENT"", ""EDGE_DETAIL_DSC"": ""AGENT"", ""POLICY_NUMBER"": ""POL-LTC-10001""}"
-e_000018,person_5006,policy_POL-LTC-10003,IS_COVERED_BY,T_RESOLVED_PERSON_POLICY_CROSSWALK,"{""RES_PERSON_ID"": 5006, ""EDGE_NAME"": ""IS_COVERED_BY"", ""EDGE_DETAIL"": null, ""EDGE_DETAIL_DSC"": null, ""POLICY_NUMBER"": ""POL-LTC-10003""}"
-e_000019,person_5001,bank_8001,HOLD_BY,T_RESOLVED_PERSON_BANK_ACCOUNT_CROSSWALK,"{""RES_BANK_ACCOUNT_ID"": 8001, ""EDGE_NAME"": ""HOLD_BY"", ""RES_PERSON_ID"": 5001}"
-e_000020,person_5005,bank_8001,HOLD_BY,T_RESOLVED_PERSON_BANK_ACCOUNT_CROSSWALK,"{""RES_BANK_ACCOUNT_ID"": 8001, ""EDGE_NAME"": ""HOLD_BY"", ""RES_PERSON_ID"": 5005}"
-e_000021,person_5002,bank_8002,HOLD_BY,T_RESOLVED_PERSON_BANK_ACCOUNT_CROSSWALK,"{""RES_BANK_ACCOUNT_ID"": 8002, ""EDGE_NAME"": ""HOLD_BY"", ""RES_PERSON_ID"": 5002}"
-e_000022,person_5003,bank_8003,HOLD_BY,T_RESOLVED_PERSON_BANK_ACCOUNT_CROSSWALK,"{""RES_BANK_ACCOUNT_ID"": 8003, ""EDGE_NAME"": ""HOLD_BY"", ""RES_PERSON_ID"": 5003}"
-e_000023,person_5006,bank_8004,HOLD_BY,T_RESOLVED_PERSON_BANK_ACCOUNT_CROSSWALK,"{""RES_BANK_ACCOUNT_ID"": 8004, ""EDGE_NAME"": ""HOLD_BY"", ""RES_PERSON_ID"": 5006}"
-e_000024,person_5007,bank_8004,HOLD_BY,T_RESOLVED_PERSON_BANK_ACCOUNT_CROSSWALK,"{""RES_BANK_ACCOUNT_ID"": 8004, ""EDGE_NAME"": ""HOLD_BY"", ""RES_PERSON_ID"": 5007}"
-e_000025,claim_C9000000001,policy_POL-LTC-10001,IS_CLAIM_AGAINST_POLICY,T_NORM_CLAIM,"{""POLICY_NUMBER"": ""POL-LTC-10001"", ""note"": ""synthesized from T_NORM_CLAIM.POLICY_NUMBER""}"
-e_000026,claim_C9000000002,policy_POL-LTC-10001,IS_CLAIM_AGAINST_POLICY,T_NORM_CLAIM,"{""POLICY_NUMBER"": ""POL-LTC-10001"", ""note"": ""synthesized from T_NORM_CLAIM.POLICY_NUMBER""}"
-e_000027,claim_C9000000003,policy_POL-LTC-10001,IS_CLAIM_AGAINST_POLICY,T_NORM_CLAIM,"{""POLICY_NUMBER"": ""POL-LTC-10001"", ""note"": ""synthesized from T_NORM_CLAIM.POLICY_NUMBER""}"
-e_000028,claim_C9000000004,policy_POL-LTC-10002,IS_CLAIM_AGAINST_POLICY,T_NORM_CLAIM,"{""POLICY_NUMBER"": ""POL-LTC-10002"", ""note"": ""synthesized from T_NORM_CLAIM.POLICY_NUMBER""}"
-e_000029,claim_C9000000005,policy_POL-LTC-10003,IS_CLAIM_AGAINST_POLICY,T_NORM_CLAIM,"{""POLICY_NUMBER"": ""POL-LTC-10003"", ""note"": ""synthesized from T_NORM_CLAIM.POLICY_NUMBER""}"
+start_id,start_label,relationship_type,end_id,end_label,properties_json
+Claim|C001,Claim,IS_CLAIM_AGAINST_POLICY,Policy|POL001,Policy,{}
+Claim|C002,Claim,IS_CLAIM_AGAINST_POLICY,Policy|POL002,Policy,{}
+Claim|C003,Claim,IS_CLAIM_AGAINST_POLICY,Policy|POL003,Policy,{}
+Claim|C004,Claim,IS_CLAIM_AGAINST_POLICY,Policy|POL004,Policy,{}
+Claim|C005,Claim,IS_CLAIM_AGAINST_POLICY,Policy|POL005,Policy,{}
+Diagnosis|11001,Diagnosis,DIAGNOSIS_FOR_CLAIM,Claim|C001,Claim,{}
+Diagnosis|11002,Diagnosis,DIAGNOSIS_FOR_CLAIM,Claim|C002,Claim,{}
+Diagnosis|11003,Diagnosis,DIAGNOSIS_FOR_CLAIM,Claim|C003,Claim,{}
+Diagnosis|11004,Diagnosis,DIAGNOSIS_FOR_CLAIM,Claim|C004,Claim,{}
+Diagnosis|11005,Diagnosis,DIAGNOSIS_FOR_CLAIM,Claim|C005,Claim,{}
+ClinicalReview|10001,ClinicalReview,CONDUCTED_ON,Claim|C001,Claim,{}
+ClinicalReview|10002,ClinicalReview,CONDUCTED_ON,Claim|C002,Claim,{}
+ClinicalReview|10003,ClinicalReview,CONDUCTED_ON,Claim|C003,Claim,{}
+ClinicalReview|10004,ClinicalReview,CONDUCTED_ON,Claim|C004,Claim,{}
+ClinicalReview|10005,ClinicalReview,CONDUCTED_ON,Claim|C005,Claim,{}
+ReviewCycle|1,ReviewCycle,INVESTIGATION_ON_CLAIM,Claim|C001,Claim,{}
+ReviewCycle|2,ReviewCycle,INVESTIGATION_ON_CLAIM,Claim|C002,Claim,{}
+ReviewCycle|3,ReviewCycle,INVESTIGATION_ON_CLAIM,Claim|C003,Claim,{}
+ReviewCycle|4,ReviewCycle,INVESTIGATION_ON_CLAIM,Claim|C004,Claim,{}
+ReviewCycle|5,ReviewCycle,INVESTIGATION_ON_CLAIM,Claim|C005,Claim,{}
+ReviewCycle|1,ReviewCycle,FLAGGED_ON,ReviewCycleMetric|1,ReviewCycleMetric,{}
+ReviewCycle|2,ReviewCycle,FLAGGED_ON,ReviewCycleMetric|2,ReviewCycleMetric,{}
+ReviewCycle|3,ReviewCycle,FLAGGED_ON,ReviewCycleMetric|3,ReviewCycleMetric,{}
+ReviewCycle|4,ReviewCycle,FLAGGED_ON,ReviewCycleMetric|4,ReviewCycleMetric,{}
+ReviewCycle|5,ReviewCycle,FLAGGED_ON,ReviewCycleMetric|5,ReviewCycleMetric,{}
+ReviewCycle|1,ReviewCycle,RESULT_IN_REMEDIATION,Remediation|1,Remediation,{}
+ReviewCycle|2,ReviewCycle,RESULT_IN_REMEDIATION,Remediation|2,Remediation,{}
+ReviewCycle|3,ReviewCycle,RESULT_IN_REMEDIATION,Remediation|3,Remediation,{}
+ReviewCycle|4,ReviewCycle,RESULT_IN_REMEDIATION,Remediation|4,Remediation,{}
+ReviewCycle|5,ReviewCycle,RESULT_IN_REMEDIATION,Remediation|5,Remediation,{}
+Policy|POL001,Policy,ASSOCIATED_RIDERS,Riders|1,Riders,{}
+Policy|POL002,Policy,ASSOCIATED_RIDERS,Riders|2,Riders,{}
+Policy|POL003,Policy,ASSOCIATED_RIDERS,Riders|3,Riders,{}
+Policy|POL004,Policy,ASSOCIATED_RIDERS,Riders|4,Riders,{}
+Policy|POL005,Policy,ASSOCIATED_RIDERS,Riders|5,Riders,{}
+Person|1001,Person,IS_COVERED_BY,Policy|POL001,Policy,{}
+Person|1002,Person,IS_COVERED_BY,Policy|POL002,Policy,{}
+Person|1003,Person,IS_COVERED_BY,Policy|POL003,Policy,{}
+Person|1004,Person,IS_COVERED_BY,Policy|POL004,Policy,{}
+Person|1005,Person,IS_COVERED_BY,Policy|POL005,Policy,{}
+Person|1001,Person,SOLD_POLICY,Policy|POL002,Policy,{}
+Person|1002,Person,SOLD_POLICY,Policy|POL003,Policy,{}
+Person|1003,Person,SOLD_POLICY,Policy|POL004,Policy,{}
+Person|1004,Person,SOLD_POLICY,Policy|POL005,Policy,{}
+Person|1005,Person,SOLD_POLICY,Policy|POL001,Policy,{}
+Person|1001,Person,LOCATED_IN,Address|3001,Address,{}
+Person|1002,Person,LOCATED_IN,Address|3002,Address,{}
+Person|1003,Person,LOCATED_IN,Address|3003,Address,{}
+Person|1004,Person,LOCATED_IN,Address|3004,Address,{}
+Person|1005,Person,LOCATED_IN,Address|3005,Address,{}
+Business|2001,Business,LOCATED_IN,Address|3001,Address,{}
+Business|2002,Business,LOCATED_IN,Address|3002,Address,{}
+Business|2003,Business,LOCATED_IN,Address|3003,Address,{}
+Business|2004,Business,LOCATED_IN,Address|3004,Address,{}
+Business|2005,Business,LOCATED_IN,Address|3005,Address,{}
+Claim|C001,Claim,HAS_ELIGIBILITY_REVIEW,EligibilityReview|1,EligibilityReview,{}
+Claim|C002,Claim,HAS_ELIGIBILITY_REVIEW,EligibilityReview|2,EligibilityReview,{}
+Claim|C003,Claim,HAS_ELIGIBILITY_REVIEW,EligibilityReview|3,EligibilityReview,{}
+Claim|C004,Claim,HAS_ELIGIBILITY_REVIEW,EligibilityReview|4,EligibilityReview,{}
+Claim|C005,Claim,HAS_ELIGIBILITY_REVIEW,EligibilityReview|5,EligibilityReview,{}
+Person|1006,Person,RECEIVES_REVIEW,EligibilityReview|1,EligibilityReview,{}
+Person|1007,Person,RECEIVES_REVIEW,EligibilityReview|2,EligibilityReview,{}
+Person|1008,Person,RECEIVES_REVIEW,EligibilityReview|3,EligibilityReview,{}
+Person|1009,Person,RECEIVES_REVIEW,EligibilityReview|4,EligibilityReview,{}
+Person|1010,Person,RECEIVES_REVIEW,EligibilityReview|5,EligibilityReview,{}
+Person|1011,Person,ASSESS_ELIGIBILITY,EligibilityReview|1,EligibilityReview,{}
+Business|2001,Business,RECEIVES_REVIEW,EligibilityReview|1,EligibilityReview,{}
+Business|2002,Business,RECEIVES_REVIEW,EligibilityReview|2,EligibilityReview,{}
+Business|2003,Business,RECEIVES_REVIEW,EligibilityReview|3,EligibilityReview,{}
+Business|2004,Business,RECEIVES_REVIEW,EligibilityReview|4,EligibilityReview,{}
+Business|2005,Business,RECEIVES_REVIEW,EligibilityReview|5,EligibilityReview,{}
+Person|1001,Person,IS_SPOUSE_OF,Person|1002,Person,{}
+Person|1002,Person,IS_SPOUSE_OF,Person|1001,Person,{}
+Person|1003,Person,ACT_ON_BEHALF_OF,Person|1004,Person,{}
+Person|1004,Person,IS_RELATED_TO,Person|1005,Person,{}
+Person|1005,Person,IS_RELATED_TO,Person|1003,Person,{}
+Person|1004,Person,DIAGNOSED_BY,Person|1013,Person,{}
+Person|1001,Person,HIPAA_AUTHORIZED_ON,Person|1015,Person,{}
+Person|1014,Person,IS_PRIMARY_CONTACT_OF,Person|1001,Person,{}
+Person|1001,Person,RECEIVE_CARE_FROM,Person|1006,Person,{}
+Business|2001,Business,RECEIVE_CARE_FROM,Person|1001,Person,{}
+Business|2002,Business,RECEIVE_CARE_FROM,Person|1002,Person,{}
+Business|2003,Business,RECEIVE_CARE_FROM,Person|1003,Person,{}
+Business|2004,Business,RECEIVE_CARE_FROM,Person|1004,Person,{}
+Business|2005,Business,RECEIVE_CARE_FROM,Person|1005,Person,{}
+BankAccount|5001,BankAccount,HELD_BY,Person|1006,Person,{}
+BankAccount|5002,BankAccount,HELD_BY,Person|1007,Person,{}
+BankAccount|5003,BankAccount,HELD_BY,Person|1008,Person,{}
+BankAccount|5004,BankAccount,HELD_BY,Person|1009,Person,{}
+BankAccount|5005,BankAccount,HELD_BY,Person|1010,Person,{}
+Person|1006,Person,PROVIDED_CARE,Care|C001|P|1006,Care,{}
+Care|C001|P|1006,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C001,Claim,{}
+Claim|C001,Claim,ASSIGNED_BENEFIT_TO,Person|1006,Person,{}
+Care|C001|P|1006,Care,PAYMENT_DEPOSITED_TO_ACCOUNT,BankAccount|5001,BankAccount,{}
+Care|C001|P|1006,Care,IS_GEO_ADJACENT_TO,Address|3001,Address,{}
+Person|1007,Person,PROVIDED_CARE,Care|C002|P|1007,Care,{}
+Care|C002|P|1007,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C002,Claim,{}
+Claim|C002,Claim,ASSIGNED_BENEFIT_TO,Person|1007,Person,{}
+Care|C002|P|1007,Care,PAYMENT_DEPOSITED_TO_ACCOUNT,BankAccount|5002,BankAccount,{}
+Care|C002|P|1007,Care,IS_GEO_ADJACENT_TO,Address|3002,Address,{}
+Person|1008,Person,PROVIDED_CARE,Care|C003|P|1008,Care,{}
+Care|C003|P|1008,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C003,Claim,{}
+Claim|C003,Claim,ASSIGNED_BENEFIT_TO,Person|1008,Person,{}
+Care|C003|P|1008,Care,PAYMENT_DEPOSITED_TO_ACCOUNT,BankAccount|5003,BankAccount,{}
+Care|C003|P|1008,Care,IS_GEO_ADJACENT_TO,Address|3003,Address,{}
+Person|1009,Person,PROVIDED_CARE,Care|C004|P|1009,Care,{}
+Care|C004|P|1009,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C004,Claim,{}
+Claim|C004,Claim,ASSIGNED_BENEFIT_TO,Person|1009,Person,{}
+Care|C004|P|1009,Care,PAYMENT_DEPOSITED_TO_ACCOUNT,BankAccount|5004,BankAccount,{}
+Care|C004|P|1009,Care,IS_GEO_ADJACENT_TO,Address|3004,Address,{}
+Person|1010,Person,PROVIDED_CARE,Care|C005|P|1010,Care,{}
+Care|C005|P|1010,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C005,Claim,{}
+Claim|C005,Claim,ASSIGNED_BENEFIT_TO,Person|1010,Person,{}
+Care|C005|P|1010,Care,PAYMENT_DEPOSITED_TO_ACCOUNT,BankAccount|5005,BankAccount,{}
+Care|C005|P|1010,Care,IS_GEO_ADJACENT_TO,Address|3005,Address,{}
+Business|2001,Business,PROVIDED_CARE,Care|C001|B|2001,Care,{}
+Care|C001|B|2001,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C001,Claim,{}
+Claim|C001,Claim,ASSIGNED_BENEFIT_TO,Business|2001,Business,{}
+Business|2002,Business,PROVIDED_CARE,Care|C002|B|2002,Care,{}
+Care|C002|B|2002,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C002,Claim,{}
+Claim|C002,Claim,ASSIGNED_BENEFIT_TO,Business|2002,Business,{}
+Business|2003,Business,PROVIDED_CARE,Care|C003|B|2003,Care,{}
+Care|C003|B|2003,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C003,Claim,{}
+Claim|C003,Claim,ASSIGNED_BENEFIT_TO,Business|2003,Business,{}
+Business|2004,Business,PROVIDED_CARE,Care|C004|B|2004,Care,{}
+Care|C004|B|2004,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C004,Claim,{}
+Claim|C004,Claim,ASSIGNED_BENEFIT_TO,Business|2004,Business,{}
+Business|2005,Business,PROVIDED_CARE,Care|C005|B|2005,Care,{}
+Care|C005|B|2005,Care,CARE_PROVIDED_FOR_CLAIM,Claim|C005,Claim,{}
+Claim|C005,Claim,ASSIGNED_BENEFIT_TO,Business|2005,Business,{}
+Person|1012,Person,COMPLETE_CLINICAL_REVIEW,ClinicalReview|10001,ClinicalReview,{}
+Policy|POL001,Policy,APPROVED_RERATE,Rerate|90001,Rerate,{}
+Person|1001,Person,USE_PHONE_NUMBER,Phone|70001,Phone,{}
+Business|2001,Business,USE_PHONE_NUMBER,Phone|70002,Phone,{}
+Month|202401,Month,IN_YEAR,Year|2024,Year,{}
+Year|2024,Year,OF_POLICY,Policy|POL001,Policy,{}
+Call|500001,Call,CALL_WITH_PHONE_NUMBER,Phone|70001,Phone,{}
+Call|500001,Call,IN_MONTH,Month|202401,Month,{}
+OnsiteAssessment|80001,OnsiteAssessment,COMPLETED_ON_CLAIM,Claim|C001,Claim,{}
+Person|1011,Person,COMPLETE_ONSITE_ASSESSMENT,OnsiteAssessment|80001,OnsiteAssessment,{}
+Alert|1-10001,Alert,ALERT_ON,Claim|C001,Claim,{}
+Alert|1-10001,Alert,ALERT_ON,Person|1006,Person,{}
+Alert|1-10001,Alert,ALERT_ON,ClinicalReview|10001,ClinicalReview,{}
+Alert|1-10001,Alert,ALERT_ON,Diagnosis|11001,Diagnosis,{}
+Business|2001,Business,SOLD_POLICY,Policy|POL002,Policy,{}
+Person|1004,Person,TREATED_BY,Business|2004,Business,{}
+Person|1006,Person,EMPLOYED_BY,Business|2001,Business,{}
+BankAccount|5005,BankAccount,HELD_BY,Business|2005,Business,{}

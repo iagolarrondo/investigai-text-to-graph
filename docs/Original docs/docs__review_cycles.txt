@@ -1,0 +1,29 @@
+Review cycles represent audit and investigation workflows for claims. Each review cycle
+is stored as a row in T_NORM_REVIEW_CYCLE.
+
+A claim can have multiple review cycles over time. To get the most recent review cycle
+for a claim, filter on LAST_REVIEW_CYCLE_IND = 1. Do not use ORDER BY / LIMIT 1 as a
+substitute — always prefer LAST_REVIEW_CYCLE_IND = 1 for current cycle lookups.
+
+IMPORTANT: T_NORM_REVIEW_CYCLE contains CLAIM_NUMBER directly. You can filter on
+CLAIM_NUMBER in T_NORM_REVIEW_CYCLE without joining to T_NORM_CLAIM.
+
+Key relationships:
+- Each review cycle can have multiple metric evaluations in T_NORM_REVIEW_CYCLE_METRIC
+  (joined on REVIEW_CYCLE_ID).
+- Each review cycle can have multiple remediation actions in T_NORM_REVIEW_CYCLE_REMEDIATION
+  (joined on REVIEW_CYCLE_ID).
+
+To retrieve metrics or remediations for a specific claim:
+  T_NORM_REVIEW_CYCLE_METRIC / T_NORM_REVIEW_CYCLE_REMEDIATION
+    → T_NORM_REVIEW_CYCLE on REVIEW_CYCLE_ID
+  Filter using CLAIM_NUMBER directly in T_NORM_REVIEW_CYCLE.
+
+Status guidance:
+- STATUS_NAM = 'Remediate' means the review cycle found fraud and money is being recovered.
+- SUB_STATUS_NAM = 'Clear' means the case was closed with no fraud found.
+- REVIEW_CYCLE_COMPLETE_IND = 1 means the review cycle is fully completed.
+- DEMAND_AMT holds the dollar amount demanded for recovery in remediated cases.
+
+When listing review cycles, default to ORDER BY REVIEW_CYCLE_START_DATE DESC and LIMIT 10
+unless a specific number or date range is provided.

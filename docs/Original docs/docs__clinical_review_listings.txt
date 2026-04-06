@@ -1,0 +1,3 @@
+If you are asked about a list of clinical reviews for a claim, keep the following in mind:
+1. Do not select all columns with "*" by default. Try to pull the columns that you need. Definitely including start/end dates, and clinical information (MMSE score, COG impairment, assistance types and frequencies etc.).
+2. Do not pull the entire data. If not given a specific number, default to top 10 records.

@@ -1,0 +1,11 @@
+Each row in T_NORM_CLINICAL_REVIEW corresponds to a clinical review record, where the clinical conditions of the claimant are assessed. CLAIM_ID is a foreign key
+which identifies for which claim this review has been conducted. NORM_CLINICAL_REVIEW_ID is the primary key of T_NORM_CLINICAL_REVIEW.
+
+In T_NORM_CLINICAL_REVIEW, assistance types and frequencies for each activities of daily living (ADL) can be found. For example, for bathing ADL, the assisting frequency
+is specified under BATHING_ASSIST_TYPE column, and the frequency is specified under BATHING_FREQ column.
+
+COG_IMPAIRMENT indicates whether the claimant has cognitive impairment. MMSE_SCORE column has a score between 0 and 30 that measures the claimant's cognitive function.
+A higher score indicates better cognitive function.
+
+If the claimant is put to no-touch, the END_DATE of the clinical review record will have a very large date, typically starting with '9999'. Claimant put to no-touch
+indicates that the condition of the claimant is worsening and there will be no further clinical reviews in the future.

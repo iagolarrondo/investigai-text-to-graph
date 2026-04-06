@@ -91,24 +91,63 @@ def load_graph() -> nx.DiGraph:
 
     G = nx.DiGraph()
 
-    for _, row in nodes_df.iterrows():
-        G.add_node(
-            row["node_id"],
-            node_type=row["node_type"],
-            label=row["label"],
-            source_table=row["source_table"],
-            properties_json=row["properties_json"],
-        )
+    # Support two schemas:
+    #   Schema A (original): node_id, node_type, label, source_table, properties_json
+    #   Schema B (Neo4j export): id, labels, properties_json
+    neo4j_nodes = "id" in nodes_df.columns and "node_id" not in nodes_df.columns
 
-    for _, row in edges_df.iterrows():
-        G.add_edge(
-            row["source_node_id"],
-            row["target_node_id"],
-            edge_id=row["edge_id"],
-            edge_type=row["edge_type"],
-            source_table=row["source_table"],
-            properties_json=row["properties_json"],
-        )
+    for _, row in nodes_df.iterrows():
+        if neo4j_nodes:
+            node_id = str(row["id"])
+            node_type = str(row.get("labels", "Unknown"))
+            props = _parse_properties_json(row.get("properties_json"))
+            # Derive a human-readable label from common property fields
+            label = (
+                props.get("NAME") or props.get("name")
+                or props.get("POLICY_NUMBER") or props.get("CLAIM_ID")
+                or props.get("ADDRESS") or props.get("ACCOUNT_NUMBER")
+                or node_id
+            )
+            G.add_node(
+                node_id,
+                node_type=node_type,
+                label=str(label),
+                source_table="",
+                properties_json=row.get("properties_json", "{}"),
+            )
+        else:
+            G.add_node(
+                row["node_id"],
+                node_type=row["node_type"],
+                label=row["label"],
+                source_table=row.get("source_table", ""),
+                properties_json=row.get("properties_json", "{}"),
+            )
+
+    # Support two schemas:
+    #   Schema A (original): edge_id, source_node_id, target_node_id, edge_type, source_table, properties_json
+    #   Schema B (Neo4j export): start_id, start_label, relationship_type, end_id, end_label, properties_json
+    neo4j_edges = "start_id" in edges_df.columns and "source_node_id" not in edges_df.columns
+
+    for i, row in edges_df.iterrows():
+        if neo4j_edges:
+            G.add_edge(
+                str(row["start_id"]),
+                str(row["end_id"]),
+                edge_id=f"e_{i:06d}",
+                edge_type=str(row.get("relationship_type", "")),
+                source_table="",
+                properties_json=row.get("properties_json", "{}"),
+            )
+        else:
+            G.add_edge(
+                row["source_node_id"],
+                row["target_node_id"],
+                edge_id=row.get("edge_id", f"e_{i:06d}"),
+                edge_type=row.get("edge_type", ""),
+                source_table=row.get("source_table", ""),
+                properties_json=row.get("properties_json", "{}"),
+            )
 
     _graph = G
     return G

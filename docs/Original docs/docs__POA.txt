@@ -1,0 +1,2 @@
+To get a power of attorney (POA) for a policyholder, T_RESOLVED_PERSON_PERSON_CROSSWALK table can be used.
+RES_PERSON_ID_SRC is a POA for RES_PERSON_ID_TGT if the EDGE_NAME is 'ACT_ON_BEHALF_OF'.

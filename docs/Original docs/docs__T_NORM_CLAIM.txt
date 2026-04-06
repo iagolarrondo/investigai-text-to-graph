@@ -1,0 +1,5 @@
+Each entry in T_NORM_CLAIM corresponds to a claim. Other tables can be joined to this table via CLAIM_ID key. To find out which policy this claim corresponds to,
+POLICY_NUMBER field can be used.
+
+If you need to find the policyholder for a given claim, you can join T_NORM_CLAIM with T_RESOLVED_PERSON_POLICY_CROSSWALK on POLICY_NUMBER
+where EDGE_NAME is 'IS_COVERED_BY'. RES_PERSON_ID will identify the policy holder.

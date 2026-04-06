@@ -1,0 +1,6 @@
+To determine the spouse of a policyholder, T_RESOLVED_PERSON_PERSON_CROSSWALK can be used.
+RES_PERSON_ID_SRC and RES_PERSON_ID_TGT are spouses if the EDGE_NAME is 'IS_SPOUSE_OF'.
+
+If you are asked about whether a claimant has a spouse or not, write a query that fetches the
+name of the spouse (if any) and other information such as SSN, birth date (if available).
+Do not filter person records by name.

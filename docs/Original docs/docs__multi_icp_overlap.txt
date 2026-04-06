@@ -1,0 +1,48 @@
+If you are asked if two or more providers/ICPs provided care on the same dates, or if two or more providers' work overlaps in a given claim, or if two or more ICPs work on the same days or care dates, use the INVESTIGAI_ICP_WORK_BLOCKS table to find overlapping work periods.
+
+You may be asked different variants of this question, such as: 
+- Do two or more ICPs work on the same days?
+- Do two or more ICPs work on the same dates?
+- Do two or more ICPs work on the same care days?
+- Do two or more ICPs have overlapping work dates?
+- Do ICPs [NAME1] and [NAME2] work on the same days on claim [XYZ]?
+
+All these question variants are equivalent and should generate similar SQL queries.
+
+IMPORTANT: Before proceeding with using INVESTIGAI_ICP_WORK_BLOCKS you MUST first check if the claim uses the LIFEPRO system by checking the CLAIM_SYSTEM field in T_NORM_CLAIM.
+LIFEPRO claims do not have charge data in T_NORM_CHARGE, so for these claims, you should return a result indicating that the claim is LIFEPRO and overlap analysis cannot be performed.
+
+## Approach for Non-LIFEPRO Claims:
+
+The INVESTIGAI_ICP_WORK_BLOCKS table contains pre-computed work blocks for each ICP on each claim. Each work block has:
+- START_DATE: First date of the consecutive work period
+- END_DATE: Last date of the consecutive work period
+- NUM_DAYS_WORKED: Total number of days worked in that block
+- PROVIDER_NAME: Full name of the ICP (FIRST_NAME LAST_NAME format)
+- CLAIM_NUMBER: The claim they worked on
+
+To find overlapping work periods between multiple ICPs:
+
+1. Create a CTE to check if the claim is LIFEPRO by querying T_NORM_CLAIM and checking CLAIM_SYSTEM field
+2. For each specified ICP, create a CTE that retrieves all their work blocks for the given claim from INVESTIGAI_ICP_WORK_BLOCKS by filtering on CLAIM_NUMBER and PROVIDER_NAME
+3. Create another CTE that finds overlapping periods by:
+   - Using a CROSS JOIN between the work block CTEs for each ICP
+   - Filtering to only include blocks where the date ranges actually overlap (block1_start <= block2_end AND block1_end >= block2_start)
+   - For each overlapping pair, calculate the shared date range:
+     - SHARED_START_DATE = the later of the two START_DATEs (use CASE WHEN to compare)
+     - SHARED_END_DATE = the earlier of the two END_DATEs (use CASE WHEN to compare)
+4. Return two result sets using UNION ALL:
+   - First: If IS_LIFEPRO = 1, return a row with ANALYSIS_STATUS='LIFEPRO_CLAIM', CLAIM_SYSTEM, CLAIM_NUMBER, and NULL values for date fields
+   - Second: If IS_LIFEPRO = 0, return rows with ANALYSIS_STATUS='COMPLETED', CLAIM_SYSTEM, CLAIM_NUMBER, SHARED_START_DATE, SHARED_END_DATE, and NUM_SHARED_DAYS (calculated as DATEDIFF between start and end + 1)
+5. Order results by SHARED_START_DATE in descending order (most recent first)
+6. Limit to top 500 rows
+
+The output schema should include:
+- ANALYSIS_STATUS: Either 'LIFEPRO_CLAIM' or 'COMPLETED'
+- CLAIM_SYSTEM: The system the claim is from
+- CLAIM_NUMBER: The claim number being analyzed
+- SHARED_START_DATE: First date of the overlapping work period
+- SHARED_END_DATE: Last date of the overlapping work period
+- NUM_SHARED_DAYS: Total number of days in the overlapping period
+
+Note: If any of the specified ICPs do not have entries in INVESTIGAI_ICP_WORK_BLOCKS for the given claim, that means they did not work on that claim (or are not ICPs), and the result should show no overlapping periods (empty result set for the COMPLETED section).

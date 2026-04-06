@@ -1,0 +1,7 @@
+If you are asked about which care sessions have geolocation enabled for a claim or ICP provider, use
+INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS as the default table. A session has geolocation data available when
+CHECK_IN_LATITUDE and CHECK_IN_LONGITUDE are not NULL.
+
+Only fall back to joining T_NORM_CARE_SESSION with T_RESOLVED_CARE_SESSION_GEOLOCATION_CROSSWALK if the question
+requires ping-level geolocation details by utilizing the
+T_NORM_CARE_SESSION_EVENT table.

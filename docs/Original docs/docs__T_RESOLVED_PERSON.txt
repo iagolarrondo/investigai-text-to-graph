@@ -1,0 +1,2 @@
+Each entry in T_RESOLVED_PERSON corresponds to a person. Other tables can be joined to this table via RES_PERSON_ID key. 
+DECEASED_IND=1 indicates that the person has deceased, and the death date can be found in DEATH_DATE column.

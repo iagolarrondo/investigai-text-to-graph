@@ -1,0 +1,15 @@
+NOTE: For most ICP caregiver app session queries, prefer INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS over this table.
+Use T_NORM_CARE_SESSION directly only when ADL activity columns (ADL_EATING, ADL_OTHER, etc.) are required.
+
+Each entry in T_NORM_CARE_SESSION corresponds to a care session submitted via Caregiver app. Other tables can be joined to this table via NORM_CARE_SESSION_ID key.
+
+The columns starting with "ADL" represent for which Activities of Daily Living (ADL for short) care was provided in that care session. For example, if ADL_EATING=1 for a care session,
+the care provider helped the claimant with eating activity. If ADL_OTHER=1, it means there is other type of care provided, for which further details can be found on ADL_VALUE_FOR_OTHER
+column in free-form text. 
+
+SUBMISSION_STATUS column represents the status of the submission of the session record. It can have the following values: Submitted, Approved, Denied, Denied-Deleted.
+
+NUM_HOURS correspond to number of hours of care for the session record. HOURLY_RATE corresponds to the money charged by the provider per hour of care.
+
+IMPORTANT: DO NOT search for a claim number using CLAIM_ID field in T_NORM_CARE_SESSION table. Join it with T_NORM_CLAIM on CLAIM_ID, and then search for claim number
+in the CLAIM_NUMBER field of T_NORM_CLAIM. 

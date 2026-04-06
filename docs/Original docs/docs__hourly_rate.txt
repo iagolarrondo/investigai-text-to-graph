@@ -1,0 +1,2 @@
+If you are asked about the hourly rate of a particular provider (or multiple providers), use INVESTIGAI_ICP_CAREGIVER_APP_SESSIONS as the default table. Write a query that returns the minimum, maximum, and average hourly rates across all sessions for that provider and claim.
+Do NOT write a query that returns every individual care session record.

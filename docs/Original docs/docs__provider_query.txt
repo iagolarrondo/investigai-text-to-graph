@@ -1,0 +1,20 @@
+If you are asked about who are the providers (whether ICP or non-ICP) for a given claim number, you should check the INVESTIGAI_PROVIDER_CLAIMS table.
+Similarly, if asked about the claim numbers that a provider (whether ICP or non-ICP) provided care for you should also use the INVESTIGAI_PROVIDER_CLAIMS table.
+
+The INVESTIGAI_PROVIDER_CLAIMS table is a unified table that contains ALL provider types:
+- ICP (Individual Care Provider)
+- HHCA (Home Health Care Agencies)
+- NH (Nursing Homes)
+- ALF (Assisted Living Facilities)
+- Other Provider (These providers are business providers)
+
+The SERVICE_START_DATE and SERVICE_END_DATE attributes in the INVESTIGAI_PROVIDER_CLAIMS table correspond to the first and last invoices associated with a claim from the specified provider. It does not necessarily mean that the provider provided care for all days in between.
+
+If more information about a provider is needed you can look at the T_RESOLVED_BUSINESS and T_RESOLVED_PERSON tables by joining the INVESTIGAI_PROVIDER_CLAIMS on PROVIDER_ID. The PROVIDER_ID corresponds to a RES_PERSON_ID attribute from T_RESOLVED_PERSON table if the PROVIDER_TYPE is ICP, otherwise it corresponds to a RES_BUSINESS_ID attribute from T_RESOLVED_BUSINESS.
+
+If asked about where providers reside or what is their address, you should:
+1. First check the PROVIDER_TYPE in INVESTIGAI_PROVIDER_CLAIMS
+2. For ICPs (PROVIDER_TYPE = 'ICP'): use T_RESOLVED_PERSON_ADDRESS_CROSSWALK with the PROVIDER_ID as RES_PERSON_ID
+3. For all other provider types: use T_RESOLVED_BUSINESS_ADDRESS_CROSSWALK with the PROVIDER_ID as RES_BUSINESS_ID
+4. Then join to T_RESOLVED_ADDRESS using RES_ADDRESS_ID to extract the address details
+When reporting addresses make sure to specify provider's name, their type, and their associated address details.
