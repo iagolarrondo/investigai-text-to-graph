@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>InvestigAI — Text-to-Graph PoC</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #121a33;
+    --panel-2: #172143;
+    --ink: #f5f7ff;
+    --muted: #a9b4d6;
+    --accent: #00d4a8;
+    --accent-2: #6aa6ff;
+    --warn: #ffb86b;
+    --line: #2a3566;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 22px; line-height: 1.5; }
+  a { color: var(--accent-2); }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 72px 48px 120px; }
+  header { border-bottom: 2px solid var(--line); padding-bottom: 40px; margin-bottom: 56px; }
+  .eyebrow { font-size: 26px; letter-spacing: 6px; color: var(--accent); text-transform: uppercase; font-weight: 700; }
+  h1 { font-size: 88px; line-height: 1.02; margin: 16px 0 20px; letter-spacing: -1.5px; }
+  h2 { font-size: 56px; margin: 0 0 28px; letter-spacing: -0.5px; }
+  h3 { font-size: 34px; margin: 0 0 16px; color: var(--accent); }
+  .lede { font-size: 32px; color: var(--muted); max-width: 1000px; }
+  .meta { margin-top: 18px; font-size: 22px; color: var(--muted); }
+
+  section { margin: 96px 0; }
+
+  .grid { display: grid; gap: 28px; }
+  .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 36px 36px; }
+  .card.dark { background: var(--panel-2); }
+
+  .stat { text-align: left; }
+  .stat .num { font-size: 96px; font-weight: 800; line-height: 1;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat .label { font-size: 24px; color: var(--muted); margin-top: 10px; text-transform: uppercase; letter-spacing: 2px; }
+
+  ul.big { padding-left: 28px; margin: 0; }
+  ul.big li { font-size: 28px; margin-bottom: 16px; }
+  ul.big li b { color: var(--accent); }
+
+  .pill { display: inline-block; padding: 10px 20px; border-radius: 999px;
+    background: #1e2a52; border: 1px solid var(--line); font-size: 20px; color: var(--ink);
+    margin: 6px 8px 6px 0; }
+  .pill.accent { background: #08322a; border-color: var(--accent); color: var(--accent); }
+
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; margin-top: 20px; }
+  .flow .step { background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px; font-size: 22px; position: relative; }
+  .flow .step .n { position: absolute; top: -18px; left: -18px; width: 44px; height: 44px; border-radius: 50%;
+    background: var(--accent); color: #00261e; font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+  .flow .step b { color: var(--accent-2); display: block; margin-bottom: 6px; font-size: 24px; }
+
+  .kvs { display: grid; grid-template-columns: 220px 1fr; gap: 14px 28px; font-size: 24px; }
+  .kvs .k { color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; font-size: 20px; }
+  .kvs .v b { color: var(--accent); }
+
+  .schema { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 16px; }
+  .node { border: 2px solid var(--accent-2); border-radius: 16px; padding: 22px; text-align: center;
+    background: #0f1734; }
+  .node .t { font-size: 30px; font-weight: 700; color: var(--accent-2); }
+  .node .c { font-size: 52px; font-weight: 800; margin-top: 6px; }
+  .node .s { font-size: 18px; color: var(--muted); margin-top: 4px; letter-spacing: 1px; text-transform: uppercase; }
+
+  .rel-list { columns: 2; column-gap: 40px; font-size: 22px; color: var(--muted); }
+  .rel-list code { color: var(--ink); background: #0f1734; padding: 2px 10px; border-radius: 6px;
+    display: inline-block; margin-bottom: 8px; font-size: 20px; }
+
+  footer { margin-top: 120px; padding-top: 32px; border-top: 1px solid var(--line); font-size: 20px; color: var(--muted); }
+
+  @media (max-width: 1100px) {
+    .grid.cols-3, .grid.cols-4, .flow, .schema { grid-template-columns: 1fr 1fr; }
+    h1 { font-size: 64px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">InvestigAI · Text-to-Graph PoC</div>
+  <h1>A graph-native<br/>fraud investigation copilot.</h1>
+  <div class="lede">Turning disconnected claims, policies, people, and providers into one explorable knowledge graph — queried in plain English.</div>
+  <div class="meta">Prepared for the SVP of Data, Manulife &nbsp;·&nbsp; April 2026</div>
+</header>
+
+<section>
+  <h2>1 · The graph</h2>
+  <p class="lede" style="font-size:28px;">Nodes are real-world entities. Edges are the relationships that reveal collusion, clustering, and conflict of interest.</p>
+
+  <div class="schema">
+    <div class="node"><div class="t">Person</div><div class="c">15</div><div class="s">Insureds · agents · spouses</div></div>
+    <div class="node"><div class="t">Policy</div><div class="c">5</div><div class="s">With riders & coverage</div></div>
+    <div class="node"><div class="t">Claim</div><div class="c">5</div><div class="s">Linked to policy & person</div></div>
+    <div class="node"><div class="t">Business</div><div class="c">5</div><div class="s">Care / service providers</div></div>
+    <div class="node"><div class="t">Address</div><div class="c">5</div><div class="s">Residential & business</div></div>
+    <div class="node"><div class="t">Bank Account</div><div class="c">5</div><div class="s">Payment destinations</div></div>
+    <div class="node"><div class="t">Care Event</div><div class="c">10</div><div class="s">Services delivered</div></div>
+    <div class="node"><div class="t">Diagnosis</div><div class="c">5</div><div class="s">Medical basis for claim</div></div>
+    <div class="node"><div class="t">Reviews & Audits</div><div class="c">25</div><div class="s">Clinical · eligibility · remediation</div></div>
+  </div>
+
+  <div class="grid cols-3" style="margin-top:40px;">
+    <div class="card stat"><div class="num">93</div><div class="label">Total nodes</div></div>
+    <div class="card stat"><div class="num">148</div><div class="label">Total edges</div></div>
+    <div class="card stat"><div class="num">38</div><div class="label">Relationship types</div></div>
+  </div>
+
+  <div class="card" style="margin-top:32px;">
+    <h3>Relationship vocabulary (sample)</h3>
+    <div class="rel-list">
+      <code>IS_CLAIM_AGAINST_POLICY</code>
+      <code>IS_COVERED_BY</code>
+      <code>SOLD_POLICY</code>
+      <code>HELD_BY</code>
+      <code>PAYMENT_DEPOSITED_TO_ACCOUNT</code>
+      <code>PROVIDED_CARE</code>
+      <code>RECEIVE_CARE_FROM</code>
+      <code>CARE_PROVIDED_FOR_CLAIM</code>
+      <code>DIAGNOSIS_FOR_CLAIM</code>
+      <code>LOCATED_IN</code>
+      <code>IS_GEO_ADJACENT_TO</code>
+      <code>IS_SPOUSE_OF</code>
+      <code>IS_RELATED_TO</code>
+      <code>ACT_ON_BEHALF_OF</code>
+      <code>HAS_ELIGIBILITY_REVIEW</code>
+      <code>RESULT_IN_REMEDIATION</code>
+      <code>ALERT_ON</code>
+      <code>FLAGGED_ON</code>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>2 · Synthetic data generated</h2>
+  <p class="lede" style="font-size:28px;">A tight, hand-crafted scenario — small enough to demo, dense enough to stress-test the graph queries.</p>
+
+  <div class="grid cols-4">
+    <div class="card stat"><div class="num">15</div><div class="label">Members / people</div></div>
+    <div class="card stat"><div class="num">5</div><div class="label">Policies</div></div>
+    <div class="card stat"><div class="num">5</div><div class="label">Claims</div></div>
+    <div class="card stat"><div class="num">5</div><div class="label">Providers</div></div>
+  </div>
+  <div class="grid cols-4" style="margin-top:24px;">
+    <div class="card stat"><div class="num">5</div><div class="label">Addresses</div></div>
+    <div class="card stat"><div class="num">5</div><div class="label">Bank accounts</div></div>
+    <div class="card stat"><div class="num">10</div><div class="label">Care events</div></div>
+    <div class="card stat"><div class="num">25</div><div class="label">Reviews & audits</div></div>
+  </div>
+
+  <div class="card dark" style="margin-top:40px;">
+    <h3>Four demo scenarios baked into the data</h3>
+    <ul class="big">
+      <li><b>The agent on the claim</b> — a writing agent overlaps with a claimant on a busy policy.</li>
+      <li><b>Same bank account, different mailboxes</b> — two people share an account from different addresses.</li>
+      <li><b>The claims sit on a family web</b> — spouse and family ties link people who also appear on claims.</li>
+      <li><b>Care business at the insured's address</b> — a provider shares an address with multiple members.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>3 · How the LLM works today</h2>
+  <p class="lede" style="font-size:28px;">The user types a question in English. Claude turns it into a structured intent. The graph engine does the rest.</p>
+
+  <div class="flow">
+    <div class="step"><div class="n">1</div><b>User question</b>"Who else is on that claim's network?"</div>
+    <div class="step"><div class="n">2</div><b>System prompt</b>~40 KB of domain schema &amp; examples, cached after the first call.</div>
+    <div class="step"><div class="n">3</div><b>Claude call</b>Returns a JSON intent: <code>{intent, claim_node_id, reason}</code></div>
+    <div class="step"><div class="n">4</div><b>Graph query</b>Typed query runs over <code>nodes.csv</code> / <code>edges.csv</code> in NetworkX.</div>
+    <div class="step"><div class="n">5</div><b>Answer + subgraph</b>Tables, a plain-English explanation, and a visual subgraph.</div>
+  </div>
+
+  <div class="card" style="margin-top:44px;">
+    <div class="kvs">
+      <div class="k">Model</div><div class="v"><b>claude-opus-4-6</b> &nbsp; <span class="pill accent">Anthropic API</span></div>
+      <div class="k">Pattern</div><div class="v">Intent routing → deterministic graph query (no free-form SQL / Cypher generation yet)</div>
+      <div class="k">Prompt</div><div class="v">System prompt with full data dictionary + few-shot examples, marked as an <b>ephemeral cache block</b> (~10% cost after first call)</div>
+      <div class="k">Output</div><div class="v">Strict JSON intent — parsed, validated against a fixed set, fallback to <code>unknown</code> on any error</div>
+      <div class="k">Grounding</div><div class="v">LLM never fabricates IDs — it selects from a known node list or extracts one from the question</div>
+      <div class="k">Interface</div><div class="v">Streamlit app with demo questions, free-text input, and an interactive graph explorer</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>4 · Next steps</h2>
+  <p class="lede" style="font-size:28px;">Where we go from a PoC to something an investigator uses every day.</p>
+
+  <div class="grid cols-2">
+    <div class="card">
+      <h3>UI &amp; investigator workflow</h3>
+      <ul class="big">
+        <li>From Streamlit demo to a <b>real investigator console</b> — case-centric, multi-pane.</li>
+        <li><b>Saveable investigations</b>: pin entities, annotate edges, export a case file.</li>
+        <li><b>Always-on graph canvas</b> with filters by entity type, time, and risk score.</li>
+        <li>In-line <b>citations</b> — every answer links back to the source rows in the graph.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>Evaluation &amp; trust</h3>
+      <ul class="big">
+        <li><b>Gold-set evals</b>: ~100 investigator questions with known correct subgraphs.</li>
+        <li><b>Intent-routing accuracy</b>, retrieval recall, and end-to-end answer correctness.</li>
+        <li><b>Hallucination guardrails</b>: every entity in an answer must exist in the graph.</li>
+        <li>Human-in-the-loop feedback capture to tune prompts and expand the intent set.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>Graph &amp; data depth</h3>
+      <ul class="big">
+        <li>Scale from <b>93 nodes to real book volumes</b> — policies, claims, providers, payments.</li>
+        <li>Add <b>temporal edges</b> (when did this link form?) for sequence-based detection.</li>
+        <li>Connect <b>unstructured sources</b>: claim notes, call transcripts, adjuster memos.</li>
+        <li><b>Entity resolution</b> upgrade — probabilistic matching on people and businesses.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>LLM &amp; reasoning</h3>
+      <ul class="big">
+        <li>Move from <b>fixed intents</b> to <b>tool-use</b>: the model calls typed graph functions.</li>
+        <li>Multi-hop reasoning with <b>agentic loops</b> for "find anyone within 3 hops of…" style asks.</li>
+        <li><b>Risk scoring</b> on subgraphs — combine graph features with LLM rationale.</li>
+        <li>Pilot on a <b>Manulife business area</b>: disability, LTC, or group benefits fraud.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  InvestigAI text-to-graph prototype · synthetic data only · built on Anthropic Claude (claude-opus-4-6), NetworkX, and Streamlit.
+</footer>
+
+</div>
+</body>
+</html>
