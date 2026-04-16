@@ -1,16 +1,16 @@
-# InvestigAI — graph investigation prototype (PoC v1)
+# InvestigAI — graph investigation prototype (PoC v1 + scalable synthetic generation)
 
 ## 1. Project overview
 
-This repository is a **small prototype** for a **fraud-investigation copilot** built around a **graph**: people, policies, claims, banks, addresses, and businesses as **nodes**, and relationships (for example *insured on policy*, *claim against policy*, *shared bank account*) as **edges**.
+This repository is a prototype for a fraud-investigation copilot built around a graph: people, policies, claims, banks, addresses, and businesses as nodes, and relationships (for example *insured on policy*, *claim against policy*, *shared bank account*) as edges.
 
 **What you can do today**
 
-- Turn synthetic **seed tables** into graph files (`nodes.csv`, `edges.csv`).
+- Generate configurable synthetic datasets (small or large), then build graph files (`nodes.csv`, `edges.csv`).
 - Open a **Streamlit app** that runs **demo questions** and **free-text** prompts (routed with **simple rules** — **no LLM API key** required).
 - See **tables**, short **plain-English explanations**, **supporting graph links**, and a **small subgraph diagram** for each answer.
 
-**Synthetic data:** The bundled scenario lives under `data/interim/poc_v1_seed/`. It is **not** real customer data.
+**Synthetic data:** all datasets in this repo are synthetic and not real customer data.
 
 ---
 
@@ -18,8 +18,13 @@ This repository is a **small prototype** for a **fraud-investigation copilot** b
 
 | Path | Purpose |
 |------|--------|
-| `data/interim/poc_v1_seed/` | Input CSV extracts for the PoC (policies, claims, resolved people, etc.). |
+| `data/interim/poc_v1_seed/` | Legacy bundled PoC seed extracts (still supported). |
+| `data/interim/generated_seed_small/` | Generated operational seed tables for a fast local dataset. |
+| `data/interim/generated_seed_large/` | Generated operational seed tables for a ~1000-node-class dataset. |
+| `eval/generated_small/` | Hidden evaluation metadata (scenario labels, mappings) for small dataset. |
+| `eval/generated_large/` | Hidden evaluation metadata (scenario labels, mappings) for large dataset. |
 | `data/processed/` | **Generated** graph: `nodes.csv`, `edges.csv` (created by the build script). |
+| `src/synthetic/` | Configurable synthetic data generation + validation tooling. |
 | `src/graph_build/` | Builds the graph CSVs from the seed. |
 | `src/graph_query/` | Loads the graph and runs investigation-style queries. |
 | `src/llm/` | Question routing and display helpers (**rule-based** in v1). |
@@ -60,6 +65,11 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+This installs all app/runtime dependencies, including:
+
+- `anthropic` (LLM routing client used by the app/router)
+- `pyvis` (interactive graph visualization in the app pages)
+
 **Optional — tests only:** if you want to run pytest and it is not installed yet:
 
 ```bash
@@ -68,17 +78,47 @@ pip install pytest
 
 If `pip` or `python` fails, try `python3` and `pip3` instead.
 
+If you use a virtual environment, run all commands with that environment active (or call binaries directly, e.g. `.venv/bin/pip`, `.venv/bin/streamlit`).
+
 ---
 
-## 4. How to generate graph files
+## 4. Generate synthetic data
+
+Two configs are provided:
+
+- `src/synthetic/configs/small.yaml` (fast iteration)
+- `src/synthetic/configs/large.yaml` (default, ~1000 target node entities across core tables)
+
+Generate a dataset:
+
+```bash
+python src/synthetic/generate_dataset.py --config src/synthetic/configs/small.yaml
+python src/synthetic/generate_dataset.py --config src/synthetic/configs/large.yaml
+```
+
+This writes:
+
+- **Operational seed** CSVs (consumed by graph build) into `data/interim/generated_seed_*`
+- **Hidden eval metadata** into `eval/generated_*`
+
+Hidden eval files are intentionally separated so scenario labels are not available in operational graph data.
+
+## 5. Build graph files
 
 From the **project root** (same folder as `requirements.txt`):
 
 ```bash
+# Legacy PoC seed (default)
 python src/graph_build/build_graph_files.py
+
+# Generated small seed
+python src/graph_build/build_graph_files.py --seed-dir data/interim/generated_seed_small
+
+# Generated large seed
+python src/graph_build/build_graph_files.py --seed-dir data/interim/generated_seed_large
 ```
 
-This reads `data/interim/poc_v1_seed/*.csv` and writes:
+This writes:
 
 - `data/processed/nodes.csv`
 - `data/processed/edges.csv`
@@ -87,7 +127,41 @@ This reads `data/interim/poc_v1_seed/*.csv` and writes:
 
 ---
 
-## 5. How to run the app
+## 6. Validate generated data and pipeline
+
+Run validation checks (optionally rebuilding graph first):
+
+```bash
+python src/synthetic/validate_pipeline.py \
+  --seed-dir data/interim/generated_seed_large \
+  --eval-dir eval/generated_large \
+  --run-build
+```
+
+Checks include:
+
+- operational data internal consistency
+- no hidden-label leakage into operational seed columns
+- graph edge endpoints map to valid nodes
+- current investigation queries still surface key suspicious patterns
+- hidden eval metadata contains ambiguous scenarios
+
+## 7. One-command pipeline (recommended)
+
+Run everything in sequence (generate -> build -> validate):
+
+```bash
+python src/synthetic/run_pipeline.py --config src/synthetic/configs/small.yaml
+python src/synthetic/run_pipeline.py --config src/synthetic/configs/large.yaml
+```
+
+Optionally launch the app immediately after successful validation:
+
+```bash
+python src/synthetic/run_pipeline.py --config src/synthetic/configs/large.yaml --launch-app
+```
+
+## 8. How to run the app
 
 **Always build the graph first** (section 4), unless those two CSVs are already up to date.
 
@@ -111,7 +185,7 @@ Your browser should open (often at `http://localhost:8501`). If it does not, cop
 
 ---
 
-## 6. How to run tests
+## 9. How to run tests
 
 Tests check that the **processed** graph files exist, are non-empty, and look internally consistent (endpoints exist, expected node/edge types appear).
 
@@ -130,7 +204,7 @@ pytest tests/ -v
 
 ---
 
-## 7. Available demo scenarios
+## 10. Available demo scenarios
 
 Full **presenter-oriented** walkthrough (questions, entities, what to highlight): **[`docs/demo_cases.md`](docs/demo_cases.md)**.
 
@@ -154,6 +228,17 @@ PYTHONPATH=. python src/graph_query/query_graph.py
 prints sample query output in the terminal.
 
 ---
+
+## 11. Synthetic design notes
+
+Current synthetic generation follows a layered approach while preserving existing schema and app compatibility:
+
+1. baseline world generation
+2. explicit suspicious motif injection
+3. ambiguous weak-signal injection
+4. structural bridge-like anomaly injection
+
+Scenario truth labels are stored only under `eval/` and are not fed into graph build, routing, or investigation logic.
 
 ## Where this fits in the bigger picture
 

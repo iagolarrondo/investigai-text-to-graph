@@ -10,7 +10,7 @@ The PoC is a **local pipeline** that turns **tabular seed extracts** into a **pr
 
 - **Build:** Python reads normalized “resolved” and policy/claim tables, assigns stable **node ids**, and emits **edges** only when both endpoints exist.
 - **Query:** Code loads the CSVs into an in-memory graph (NetworkX), runs focused queries (claim neighborhood, shared banks, family clusters, business–address overlap), and returns tables plus short narratives.
-- **App:** Streamlit loads the graph once per session, routes user questions with **rule-based** intent matching (no LLM API in v1), and draws a small **subgraph** for each answer.
+- **App:** Streamlit loads the graph once per session, routes user questions with a Claude-based intent router, and draws a small **subgraph** for each answer.
 
 Code lives mainly under `src/graph_build/`, `src/graph_query/`, `src/llm/`, and `src/app/`.
 
@@ -22,7 +22,8 @@ Code lives mainly under `src/graph_build/`, `src/graph_query/`, `src/llm/`, and 
 flowchart LR
   subgraph inputs["Inputs"]
     RAW["Raw schemas / docs\n(design reference)"]
-    SEED["Synthetic seed CSVs\n(data/interim/poc_v1_seed)"]
+    SEED["Synthetic seed CSVs\n(data/interim/poc_v1_seed or generated_seed_*)"]
+    EVAL["Hidden eval metadata\n(eval/generated_*)"]
   end
 
   subgraph build["Graph build"]
@@ -41,13 +42,14 @@ flowchart LR
 
   RAW -.->|"informs design"| SEED
   SEED --> PIPE
+  SEED -.->|"separate from runtime graph"| EVAL
   PIPE --> CSV
   CSV --> Q
   Q --> APP
   APP --> USER
 ```
 
-**How to read it:** Arrows show **dependency order**. Raw schemas and documentation **do not** feed the build script directly in v1; they shaped **what** the synthetic seed looks like. The **only** automatic input to the builder today is the seed folder.
+**How to read it:** Arrows show dependency order. Raw schemas and documentation do not feed the build script directly; they shape synthetic generation rules. Hidden eval files are intentionally separated and are not consumed by graph build or runtime queries.
 
 ---
 

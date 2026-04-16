@@ -16,6 +16,7 @@ Run:  python src/graph_build/build_graph_files.py
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -24,7 +25,8 @@ import pandas as pd
 # Project root: src/graph_build -> src -> project
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
-SEED_DIR = PROJECT_ROOT / "data" / "interim" / "poc_v1_seed"
+DEFAULT_SEED_DIR = PROJECT_ROOT / "data" / "interim" / "poc_v1_seed"
+SEED_DIR = DEFAULT_SEED_DIR
 
 NODES_CSV = PROCESSED_DIR / "nodes.csv"
 EDGES_CSV = PROCESSED_DIR / "edges.csv"
@@ -601,7 +603,20 @@ def build_core_edges(nodes_df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True)
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build graph CSV files from seed CSVs.")
+    parser.add_argument(
+        "--seed-dir",
+        default=str(DEFAULT_SEED_DIR),
+        help="Directory containing seed CSV files (defaults to poc_v1_seed).",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    global SEED_DIR
+    args = _parse_args()
+    SEED_DIR = Path(args.seed_dir).resolve()
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
     if not SEED_DIR.is_dir():

@@ -1,0 +1,14 @@
+seed: 20260416
+output_seed_dir: data/interim/generated_seed_large
+output_eval_dir: eval/generated_large
+target_counts:
+  persons: 360
+  businesses: 36
+  policies: 240
+  claims: 220
+  addresses: 90
+  bank_accounts: 70
+scenario_mix:
+  baseline: 0.63
+  suspicious: 0.27
+  ambiguous: 0.10
