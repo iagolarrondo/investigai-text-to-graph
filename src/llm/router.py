@@ -1,21 +1,12 @@
 """
-Intent router: natural language → investigation graph query.
+Investigation graph routing.
 
-Uses Claude (claude-opus-4-6) via the Anthropic API to classify the user's
-question into one of five investigation intents, then dispatches to the
-matching graph query function.
+- **Auto** mode (Streamlit): ``route_question_auto`` calls **Claude** to classify the question
+  into an investigation intent (JSON). Falls back to **keyword rules** if the API is
+  unavailable or returns ``unknown``.
+- **Manual** template selection: UI builds a :class:`RouterDecision` with ``source="rules"``.
 
-API key setup
-─────────────
-Set your key in the project .env file (recommended):
-
-    ANTHROPIC_API_KEY=sk-ant-...
-
-Or export it in your shell before running:
-
-    export ANTHROPIC_API_KEY=sk-ant-...
-
-The .env file is loaded automatically when this module is imported.
+``load_dotenv`` runs on import so ``ANTHROPIC_API_KEY`` is available.
 """
 
 from __future__ import annotations
@@ -27,16 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-# Load .env from project root so ANTHROPIC_API_KEY is available
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 except ImportError:
-    pass  # python-dotenv not installed; rely on shell env
+    pass
 
 import anthropic
 
-from src.llm.prompts import FEW_SHOT_EXAMPLES, SYSTEM_INTENT_ROUTER
+from src.llm.prompts import FEW_SHOT_INTENT_EXAMPLES, SYSTEM_INTENT_ROUTER
 
 IntentName = Literal[
     "claim_network",
@@ -47,7 +37,8 @@ IntentName = Literal[
     "unknown",
 ]
 
-DEFAULT_CLAIM_NODE_ID = "claim_C9000000001"
+# Must match a Claim node id in ``data/processed/nodes.csv`` (schema A: ``claim_*``, schema B: ``Claim|*``).
+DEFAULT_CLAIM_NODE_ID = "Claim|C001"
 
 _CLAIM_ID_PATTERN = re.compile(r"\b(?:claim_|Claim\|)[A-Za-z0-9|.+-]+", re.IGNORECASE)
 
@@ -59,30 +50,54 @@ VALID_INTENTS: set[str] = {
     "business_patterns",
 }
 
+# Neighborhood / hop-style questions → claim_subgraph (rule fallback)
+_SUBGRAPH_PATTERN = re.compile(
+    r"(?:\b|^)(?:"
+    r"hop|hops|neighborhood|neighbourhood|nearby|n-?hop|"
+    r"subgraph|surround|entities around|link chart around|around this claim|"
+    r"within\s+\d+\s*(?:hop|hops|step|steps)?"
+    r")(?:\b|$)",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class RouterDecision:
     intent: IntentName
     claim_node_id: str | None
-    source: Literal["llm"]
+    source: Literal["llm", "rules"]
     reason: str
     matched_keywords: tuple[str, ...] = ()
 
 
-def _extract_claim_node_id(text: str) -> str | None:
+def extract_claim_node_id(text: str) -> str | None:
+    """Return a ``claim_*`` (or ``Claim|...``) token from ``text``, if any."""
     m = _CLAIM_ID_PATTERN.search(text)
     return m.group(0) if m else None
 
 
-def route_question_rules(question: str) -> RouterDecision:
-    """Thin wrapper — all routing now goes through the LLM."""
-    return route_question_llm(question)
+def claim_anchor_is_valid(claim_node_id: str) -> bool:
+    """
+    Return True if ``claim_node_id`` exists in the loaded graph and is a **Claim** node.
+
+    Use this before claim-scoped queries so Person/Policy ids never reach
+    ``get_claim_network`` / ``get_claim_subgraph_summary``.
+    """
+    from src.graph_query import query_graph as qg
+
+    try:
+        G = qg.get_graph()
+    except RuntimeError:
+        return False
+    if claim_node_id not in G:
+        return False
+    return G.nodes[claim_node_id].get("node_type") == "Claim"
 
 
 def route_question_llm(question: str) -> RouterDecision:
     """
-    Send the question to Claude and parse the returned JSON intent.
-    Falls back to intent='unknown' on any API or parse error.
+    Send the question to Claude and parse JSON ``intent`` / ``claim_node_id`` / ``reason``.
+    Returns ``unknown`` on missing API key, auth errors, or parse errors.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -94,11 +109,8 @@ def route_question_llm(question: str) -> RouterDecision:
         )
 
     client = anthropic.Anthropic(api_key=api_key)
+    messages = list(FEW_SHOT_INTENT_EXAMPLES) + [{"role": "user", "content": question}]
 
-    messages = list(FEW_SHOT_EXAMPLES) + [{"role": "user", "content": question}]
-
-    # System prompt is sent as a cacheable block — the domain docs (~40KB) are
-    # static, so after the first call they are served from cache at ~10% cost.
     system = [
         {
             "type": "text",
@@ -116,7 +128,6 @@ def route_question_llm(question: str) -> RouterDecision:
         )
         raw = response.content[0].text.strip()
 
-        # Strip markdown fences if the model wraps with ```json ... ```
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
@@ -126,14 +137,14 @@ def route_question_llm(question: str) -> RouterDecision:
         if intent not in VALID_INTENTS:
             intent = "unknown"
 
-        claim_node_id = parsed.get("claim_node_id") or _extract_claim_node_id(question)
+        claim_node_id = parsed.get("claim_node_id") or extract_claim_node_id(question)
         reason = parsed.get("reason", "")
 
         return RouterDecision(
-            intent=intent,
+            intent=intent,  # type: ignore[arg-type]
             claim_node_id=claim_node_id if intent in ("claim_network", "claim_subgraph") else None,
             source="llm",
-            reason=reason,
+            reason=reason or "Classified by Claude.",
         )
 
     except anthropic.AuthenticationError:
@@ -152,12 +163,180 @@ def route_question_llm(question: str) -> RouterDecision:
         )
 
 
+def route_question_rules(question: str) -> RouterDecision:
+    """
+    Keyword / regex routing (no LLM). Used for fallback when Auto classification fails
+    or returns unknown, and for tests.
+    """
+    q = (question or "").lower().strip()
+    if not q:
+        return RouterDecision(
+            intent="unknown",
+            claim_node_id=None,
+            source="rules",
+            reason="Empty question.",
+            matched_keywords=(),
+        )
+
+    cid = extract_claim_node_id(question)
+    matched: list[str] = []
+
+    if _SUBGRAPH_PATTERN.search(q):
+        matched.append("neighborhood/hop")
+        return RouterDecision(
+            intent="claim_subgraph",
+            claim_node_id=cid,
+            source="rules",
+            reason="Matched neighborhood, hop-distance, or subgraph-style wording.",
+            matched_keywords=tuple(matched),
+        )
+
+    bank_signals = ("bank", "account", "joint", "holder", "holders", "routing", "deposit")
+    bank_context = any(s in q for s in bank_signals)
+    sharing_signals = (
+        "share",
+        "shared",
+        "two people",
+        "multiple",
+        "joint",
+        "different address",
+        "different addresses",
+        "same account",
+        "payment diversion",
+        "multi-holder",
+        "holders",
+    )
+    if bank_context and any(s in q for s in sharing_signals):
+        matched.append("bank/account")
+        return RouterDecision(
+            intent="shared_bank",
+            claim_node_id=None,
+            source="rules",
+            reason="Matched shared-bank or joint-account style wording.",
+            matched_keywords=tuple(matched),
+        )
+
+    people_keys = (
+        "family",
+        "spouse",
+        "relative",
+        "cluster",
+        "related",
+        "marriage",
+        "poa",
+        "hipaa",
+        "social",
+        "sibling",
+        "parent",
+        "child",
+    )
+    if any(k in q for k in people_keys):
+        matched.append("relationship")
+        return RouterDecision(
+            intent="people_clusters",
+            claim_node_id=None,
+            source="rules",
+            reason="Matched family / relationship / cluster style wording.",
+            matched_keywords=tuple(matched),
+        )
+
+    biz_keys = (
+        "business",
+        "provider",
+        "agency",
+        "colocation",
+        "co-location",
+        "same address",
+        "icp",
+        "home care",
+        "facility",
+        "geolocation",
+        "check-in",
+        "check in",
+        "miles from",
+    )
+    if any(k in q for k in biz_keys):
+        matched.append("business/location")
+        return RouterDecision(
+            intent="business_patterns",
+            claim_node_id=None,
+            source="rules",
+            reason="Matched business, provider, or address-pattern wording.",
+            matched_keywords=tuple(matched),
+        )
+
+    claim_keys = (
+        "claim",
+        "policy",
+        "agent",
+        "claimant",
+        "writing",
+        "wrote",
+        "sold policy",
+        "insured",
+        "policyholder",
+        "policy holder",
+        "other claim",
+        "same policy",
+        "filed",
+        "clm-",
+    )
+    if cid or any(k in q for k in claim_keys):
+        matched.append("claim/policy")
+        return RouterDecision(
+            intent="claim_network",
+            claim_node_id=cid,
+            source="rules",
+            reason="Matched claim, policy, or party wording (default claim-centric view).",
+            matched_keywords=tuple(matched),
+        )
+
+    return RouterDecision(
+        intent="unknown",
+        claim_node_id=None,
+        source="rules",
+        reason="Could not match keywords. Pick an analysis type from the dropdown or mention claim/policy, bank, family, business, or hops/neighborhood.",
+        matched_keywords=(),
+    )
+
+
+def route_question_auto(question: str) -> RouterDecision:
+    """
+    **Auto** routing: try LLM classification first; if ``unknown`` or API failure message
+    suggests no usable intent, fall back to keyword rules (still returns a decision).
+    """
+    llm_dec = route_question_llm(question)
+
+    if llm_dec.intent != "unknown":
+        return llm_dec
+
+    # Fallback: keyword rules when LLM could not classify
+    fb = route_question_rules(question)
+    if fb.intent != "unknown":
+        return RouterDecision(
+            intent=fb.intent,
+            claim_node_id=fb.claim_node_id,
+            source="rules",
+            reason=f"LLM returned unknown ({llm_dec.reason}); fallback: {fb.reason}",
+            matched_keywords=fb.matched_keywords,
+        )
+
+    return RouterDecision(
+        intent="unknown",
+        claim_node_id=None,
+        source="llm",
+        reason=llm_dec.reason or fb.reason,
+        matched_keywords=(),
+    )
+
+
 def route_question(question: str, *, use_llm: bool = True) -> RouterDecision:
-    return route_question_llm(question)
+    """If ``use_llm``, use :func:`route_question_auto`; else :func:`route_question_rules`."""
+    return route_question_auto(question) if use_llm else route_question_rules(question)
 
 
 def dispatch_routed_query(decision: RouterDecision) -> dict[str, Any]:
-    """Run the graph function matching decision.intent."""
+    """Run the graph function matching ``decision.intent``."""
     from src.graph_query import query_graph as qg
 
     if decision.intent == "unknown":
@@ -171,10 +350,32 @@ def dispatch_routed_query(decision: RouterDecision) -> dict[str, Any]:
     try:
         if decision.intent == "claim_network":
             cid = decision.claim_node_id or DEFAULT_CLAIM_NODE_ID
+            if not claim_anchor_is_valid(cid):
+                return {
+                    "kind": "error",
+                    "payload": None,
+                    "decision": decision,
+                    "error": (
+                        f"{cid!r} is not a Claim node in the loaded graph. "
+                        "Use a claim id (e.g. Claim|C001, claim_C900…), not Person|… or Policy|…. "
+                        "For person-centric questions, use **Planner** mode or templates that do not require a claim anchor."
+                    ),
+                }
             return {"kind": "claim_network", "payload": qg.get_claim_network(cid), "decision": decision}
 
         if decision.intent == "claim_subgraph":
             cid = decision.claim_node_id or DEFAULT_CLAIM_NODE_ID
+            if not claim_anchor_is_valid(cid):
+                return {
+                    "kind": "error",
+                    "payload": None,
+                    "decision": decision,
+                    "error": (
+                        f"{cid!r} is not a Claim node in the loaded graph. "
+                        "Use a claim id (e.g. Claim|C001, claim_C900…), not Person|… or Policy|…. "
+                        "For person/policy relationship questions, use **Planner** mode instead of claim neighborhood."
+                    ),
+                }
             return {"kind": "claim_subgraph", "payload": qg.get_claim_subgraph_summary(cid, max_depth=4), "decision": decision}
 
         if decision.intent == "shared_bank":

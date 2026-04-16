@@ -4,6 +4,8 @@ These four scenarios are grounded in the **synthetic seed** under `data/interim/
 
 Use this as a **presenter cheat sheet**: what to ask, what should light up, and what a strong answer sounds like.
 
+**Tool-planner angles (not tied to a single scenario):** `get_person_subgraph_summary` gives an undirected N-hop neighborhood around a **Person** (insured/party). `get_policy_network` lists the policy row, people on the policy (`IS_COVERED_BY` / `SOLD_POLICY`), and claims against it (`IS_CLAIM_AGAINST_POLICY`)—useful when the story starts from a **policy** or **person**, not a claim.
+
 ---
 
 ## 1. “The agent on the claim”

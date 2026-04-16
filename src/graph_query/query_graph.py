@@ -19,6 +19,7 @@ import json
 from collections import deque
 from pathlib import Path
 from pprint import pprint
+from typing import Any
 
 import networkx as nx
 import pandas as pd
@@ -30,6 +31,17 @@ EDGES_CSV = PROJECT_ROOT / "data" / "processed" / "edges.csv"
 
 # In-memory graph, filled by load_graph(). Query helpers read from here.
 _graph: nx.DiGraph | None = None
+
+# Person↔Person edges treated as “personal relationship” (aligned with ``find_related_people_clusters``).
+PERSON_TO_PERSON_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
+    {
+        "IS_SPOUSE_OF",
+        "IS_RELATED_TO",
+        "ACT_ON_BEHALF_OF",
+        "HIPAA_AUTHORIZED_ON",
+        "DIAGNOSED_BY",
+    }
+)
 
 
 def _require_graph() -> nx.DiGraph:
@@ -213,6 +225,52 @@ def summarize_graph() -> dict:
     }
 
 
+def get_graph_relationship_catalog() -> dict[str, Any]:
+    """
+    **Schema-level view of the loaded graph:** every distinct directed triple
+    ``(from_node_type, edge_type, to_node_type)`` with counts.
+
+    This updates automatically when CSVs change—no code change needed when new
+    node types or relationships appear. Investigators (and LLM planners) use it
+    to see **how** entity types connect in one hop before designing multi-step
+    queries or asking for new composite helpers.
+    """
+    G = _require_graph()
+    key_counts: dict[tuple[str, str, str], int] = {}
+    for u, v, data in G.edges(data=True):
+        et = str(data.get("edge_type") or "(missing)")
+        ut = str(G.nodes[u].get("node_type") or "(missing)")
+        vt = str(G.nodes[v].get("node_type") or "(missing)")
+        k = (ut, et, vt)
+        key_counts[k] = key_counts.get(k, 0) + 1
+
+    rows = [
+        {
+            "from_node_type": a,
+            "edge_type": e,
+            "to_node_type": b,
+            "count": c,
+        }
+        for (a, e, b), c in sorted(key_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    df = pd.DataFrame(rows)
+    explanation_plain = (
+        "Each row is a **directed pattern** stored in this extract: entities of type "
+        "**from_node_type** connect to **to_node_type** via **edge_type** (arrow follows the CSV). "
+        "Multi-hop questions can be planned by chaining these shapes. Counts help you judge "
+        "how common a path is in the demo book."
+    )
+    summary = (
+        f"{len(rows)} distinct relationship shape(s); {G.number_of_edges()} edge(s) total."
+    )
+    return {
+        "summary": summary,
+        "explanation_plain": explanation_plain,
+        "evidence_bullets": [],
+        "table": df,
+    }
+
+
 def _narrate_claim_network(
     *,
     claim_node_id: str,
@@ -222,10 +280,12 @@ def _narrate_claim_network(
     other_claim_rows: list[dict],
     party_rows: list[dict],
     match_rows: list[dict],
+    claim_people_rows: list[dict] | None = None,
 ) -> tuple[str, list[str]]:
     """
     Plain-English summary + bullet list of graph ids/relationships for investigators.
     """
+    claim_people_rows = claim_people_rows or []
     evidence: list[str] = []
     for pid in policy_ids:
         evidence.append(f"{claim_node_id} —[IS_CLAIM_AGAINST_POLICY]→ {pid}")
@@ -252,6 +312,9 @@ def _narrate_claim_network(
             f"({r.get('person_label', '')}) via name + birth date on the graph."
         )
 
+    for r in claim_people_rows:
+        evidence.append(r.get("summary", str(r.get("person_node_id", ""))))
+
     parts = [
         f"We started from claim **{claim_number}** (`{claim_node_id}`) and followed "
         "the graph link that says this claim is filed against a policy."
@@ -270,9 +333,17 @@ def _narrate_claim_network(
     else:
         parts.append("No other claims share that policy in this extract.")
 
+    if claim_people_rows:
+        parts.append(
+            f"There are **{len(claim_people_rows)}** person(s) tied to this **claim** in the graph "
+            "(direct edges such as benefit assignment, or two-hop paths via reviews/care—see "
+            "**people_linked_to_claim**). That list can include people who are **not** listed as "
+            "insureds or agents on the policy."
+        )
+
     if party_rows:
         parts.append(
-            "The tables list every person tied to that policy as insured or agent "
+            "**people_linked_to_policy** lists every person tied to that policy as insured or agent "
             "(edges `IS_COVERED_BY` and `SOLD_POLICY`)."
         )
 
@@ -291,20 +362,117 @@ def _narrate_claim_network(
     return " ".join(parts), evidence
 
 
+def _collect_people_linked_to_claim(G: nx.DiGraph, claim_node_id: str) -> list[dict]:
+    """
+    People tied to the **claim node** itself—not only through the policy:
+
+    * **Direct** — any ``Person`` with an edge to or from the claim (e.g.
+      ``ASSIGNED_BENEFIT_TO``, or Person → Claim if modeled).
+    * **Two hops** — ``Claim ↔ X ↔ Person`` where ``X`` is **not** a Policy (e.g.
+      eligibility review, care episode, diagnosis) so benefit assignees and reviewers
+      appear even when they are not insureds/agents on the policy.
+    """
+    rows: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(
+        pid: str,
+        *,
+        path_type: str,
+        summary: str,
+        via: str = "",
+        via_type: str = "",
+    ) -> None:
+        if pid in seen:
+            return
+        seen.add(pid)
+        d = _node_row(G, pid)
+        rows.append(
+            {
+                "person_node_id": pid,
+                "person_label": d.get("label"),
+                "path_type": path_type,
+                "summary": summary,
+                "via_intermediate_node": via,
+                "via_intermediate_type": via_type,
+            }
+        )
+
+    # Direct: claim → person
+    for succ in G.successors(claim_node_id):
+        if G.nodes[succ].get("node_type") != "Person":
+            continue
+        et = G.edges[claim_node_id, succ].get("edge_type", "")
+        _add(
+            succ,
+            path_type="direct",
+            summary=f"{claim_node_id} —[{et}]→ {succ}",
+        )
+
+    # Direct: person → claim
+    for pred in G.predecessors(claim_node_id):
+        if G.nodes[pred].get("node_type") != "Person":
+            continue
+        et = G.edges[pred, claim_node_id].get("edge_type", "")
+        _add(
+            pred,
+            path_type="direct",
+            summary=f"{pred} —[{et}]→ {claim_node_id}",
+        )
+
+    # Two-hop via any non-Policy entity (reviews, care, diagnosis, etc.)
+    mids = set(G.successors(claim_node_id)) | set(G.predecessors(claim_node_id))
+    for mid in mids:
+        if mid == claim_node_id:
+            continue
+        if G.nodes[mid].get("node_type") == "Policy":
+            continue
+        mid_type = str(G.nodes[mid].get("node_type") or "Unknown")
+        for nb in set(G.successors(mid)) | set(G.predecessors(mid)):
+            if nb in (claim_node_id, mid):
+                continue
+            if G.nodes[nb].get("node_type") != "Person":
+                continue
+            if nb in seen:
+                continue
+            if G.has_edge(mid, nb):
+                et2 = G.edges[mid, nb].get("edge_type", "")
+            elif G.has_edge(nb, mid):
+                et2 = G.edges[nb, mid].get("edge_type", "")
+            else:
+                continue
+            _add(
+                nb,
+                path_type="via_intermediate",
+                summary=(
+                    f"{claim_node_id} ↔ {mid} ({mid_type}) —[{et2}]→ {nb} "
+                    f"(two-hop; not via policy-only path)"
+                ),
+                via=mid,
+                via_type=mid_type,
+            )
+
+    return rows
+
+
 def get_claim_network(claim_node_id: str) -> dict:
     """
     Build an **ego-centric “claim story”** slice: policy, peer claims, policy parties,
+    people **directly** linked to the claim (and via non-policy intermediaries),
     and (if possible) the **Person** node that matches the claimant on the claim record.
 
     **How it works:** Starting at the Claim node, follow ``IS_CLAIM_AGAINST_POLICY`` to
     the Policy. From that policy, collect other Claim nodes (same edge type, reversed
     direction). Collect every Person with an edge **to** the policy (``IS_COVERED_BY``,
-    ``SOLD_POLICY``). Finally, match ``FIRST_NAME`` / ``LAST_NAME`` / ``BIRTH_DATE``
-    on the claim’s ``properties_json`` to Person node properties.
+    ``SOLD_POLICY``). Separately, collect every **Person** adjacent to the **claim**
+    (any edge type) and persons reachable in two hops through **non-Policy** nodes
+    (e.g. eligibility review, care). Finally, match ``FIRST_NAME`` / ``LAST_NAME`` /
+    ``BIRTH_DATE`` on the claim’s ``properties_json`` to Person node properties.
 
     **Returns:** a dict including DataFrames (``claim``, ``linked_policies``, …),
-    machine ``summary``, plus **``explanation_plain``** (short prose for investigators)
-    and **``evidence_bullets``** (key node ids and relationship types used).
+    ``people_linked_to_claim`` (claim-adjacent people), ``people_linked_to_policy``
+    (policy parties), machine ``summary``, plus **``explanation_plain``** and
+    **``evidence_bullets``**.
     """
     G = _require_graph()
     if claim_node_id not in G:
@@ -419,10 +587,14 @@ def get_claim_network(claim_node_id: str) -> dict:
             )
     claimant_match = pd.DataFrame(match_rows)
 
+    claim_people_rows = _collect_people_linked_to_claim(G, claim_node_id)
+    people_on_claim = pd.DataFrame(claim_people_rows)
+
     summary = (
         f"Claim {claim_node_id}: {len(policy_ids)} linked polic(y/ies), "
         f"{len(other_claim_rows)} other claim(s) on same policy, "
         f"{len(party_rows)} person–policy link(s), "
+        f"{len(claim_people_rows)} person(s) linked to the claim (direct or via non-policy), "
         f"{len(match_rows)} claimant→person match(es)."
     )
 
@@ -434,6 +606,7 @@ def get_claim_network(claim_node_id: str) -> dict:
         other_claim_rows=other_claim_rows,
         party_rows=party_rows,
         match_rows=match_rows,
+        claim_people_rows=claim_people_rows,
     )
 
     return {
@@ -443,6 +616,7 @@ def get_claim_network(claim_node_id: str) -> dict:
         "claim": claim_df,
         "linked_policies": linked_policies,
         "other_claims_on_policy": other_claims,
+        "people_linked_to_claim": people_on_claim,
         "people_linked_to_policy": people_on_policy,
         "claimant_person_match": claimant_match,
     }
@@ -563,6 +737,182 @@ def get_claim_subgraph_summary(claim_node_id: str, max_depth: int = 2) -> dict:
     }
 
 
+def get_person_subgraph_summary(person_node_id: str, max_depth: int = 2) -> dict:
+    """
+    **Person-centric neighborhood:** same undirected N-hop idea as
+    :func:`get_claim_subgraph_summary`, but anchored on a **Person** node.
+
+    Use when the question is about “what’s around this **insured** / **party**”
+    without starting from a claim.
+    """
+    G = _require_graph()
+    if person_node_id not in G:
+        raise KeyError(f"Unknown node_id: {person_node_id!r}")
+    if G.nodes[person_node_id].get("node_type") != "Person":
+        raise ValueError(f"Node {person_node_id!r} is not a Person node")
+
+    dist = _nodes_within_undirected_depth(G, person_node_id, max_depth)
+    involved = frozenset(dist.keys())
+
+    node_rows: list[dict] = []
+    for nid in sorted(involved, key=lambda x: (dist[x], x)):
+        d = G.nodes[nid]
+        node_rows.append(
+            {
+                "node_id": nid,
+                "node_type": d.get("node_type", ""),
+                "label": d.get("label", ""),
+                "depth_from_person": dist[nid],
+            }
+        )
+    nodes_df = pd.DataFrame(node_rows)
+
+    edge_rows: list[dict] = []
+    for u, v, data in G.edges(data=True):
+        if u not in involved or v not in involved:
+            continue
+        edge_rows.append(
+            {
+                "from_node": u,
+                "to_node": v,
+                "edge_type": data.get("edge_type", ""),
+                "edge_id": data.get("edge_id", ""),
+            }
+        )
+    edges_df = pd.DataFrame(edge_rows)
+
+    type_counts_map: dict[str, int] = {}
+    for nid in involved:
+        t = str(G.nodes[nid].get("node_type") or "Unknown")
+        type_counts_map[t] = type_counts_map.get(t, 0) + 1
+    type_rows = [{"node_type": t, "count": type_counts_map[t]} for t in sorted(type_counts_map, key=lambda k: (-type_counts_map[k], k))]
+    type_counts_df = pd.DataFrame(type_rows)
+
+    p_lab = G.nodes[person_node_id].get("label") or person_node_id
+    depth_word = "hop" if max_depth == 1 else "hops"
+    summary = (
+        f"Person {person_node_id} ({p_lab}): within {max_depth} undirected {depth_word}, "
+        f"{len(involved)} nodes, {len(edge_rows)} edges among them."
+    )
+
+    explanation_plain = (
+        f"We started at person **{p_lab}** (`{person_node_id}`) and included **every entity** "
+        f"reachable in up to **{max_depth} undirected step(s)** on the link chart (same distance "
+        "rule as the claim neighborhood view). "
+        f"The slice has **{len(involved)}** entities across **{len(type_counts_map)}** types."
+    )
+
+    evidence: list[str] = []
+    for _, row in edges_df.head(40).iterrows():
+        u, v, et = row["from_node"], row["to_node"], row["edge_type"]
+        evidence.append(f"{u} —[{et}]→ {v}")
+    if len(edges_df) > 40:
+        evidence.append(f"… and {len(edges_df) - 40} more edges in the neighborhood.")
+
+    return {
+        "summary": summary,
+        "explanation_plain": explanation_plain,
+        "evidence_bullets": evidence,
+        "person_node_id": person_node_id,
+        "max_depth": max_depth,
+        "type_counts": type_counts_df,
+        "nodes": nodes_df,
+        "edges": edges_df,
+    }
+
+
+def get_policy_network(policy_node_id: str) -> dict[str, Any]:
+    """
+    **Policy-centric slice:** the policy row, every **Person** tied to it
+    (``IS_COVERED_BY``, ``SOLD_POLICY``), and every **Claim** filed against it
+    (``IS_CLAIM_AGAINST_POLICY`` from claim → policy).
+
+    Complements :func:`get_claim_network` (claim-first) and :func:`get_person_policies` (person-first).
+    """
+    G = _require_graph()
+    if policy_node_id not in G:
+        raise KeyError(f"Unknown node_id: {policy_node_id!r}")
+    if G.nodes[policy_node_id].get("node_type") != "Policy":
+        raise ValueError(f"Node {policy_node_id!r} is not a Policy node")
+
+    pid = policy_node_id
+    dpol = _node_row(G, pid)
+    pprops = dpol["parsed_props"]
+    policy_df = pd.DataFrame(
+        [
+            {
+                "policy_node_id": pid,
+                "label": dpol.get("label"),
+                "POLICY_NUMBER": pprops.get("POLICY_NUMBER"),
+                "POLICY_STATUS": pprops.get("POLICY_STATUS"),
+            }
+        ]
+    )
+
+    people_rows: list[dict[str, Any]] = []
+    for pred in G.predecessors(pid):
+        if G.nodes[pred].get("node_type") != "Person":
+            continue
+        et = G.edges[pred, pid].get("edge_type")
+        if et not in ("IS_COVERED_BY", "SOLD_POLICY"):
+            continue
+        d = _node_row(G, pred)
+        people_rows.append(
+            {
+                "person_node_id": pred,
+                "person_label": d.get("label"),
+                "relationship_to_policy": et,
+                "EDGE_DETAIL": _parse_properties_json(G.edges[pred, pid].get("properties_json")).get(
+                    "EDGE_DETAIL"
+                ),
+            }
+        )
+    people_on_policy = pd.DataFrame(people_rows)
+
+    claim_rows: list[dict[str, Any]] = []
+    for pred in G.predecessors(pid):
+        if G.nodes[pred].get("node_type") != "Claim":
+            continue
+        if G.edges[pred, pid].get("edge_type") != "IS_CLAIM_AGAINST_POLICY":
+            continue
+        d = _node_row(G, pred)
+        cprops = d["parsed_props"]
+        claim_rows.append(
+            {
+                "claim_node_id": pred,
+                "label": d.get("label"),
+                "CLAIM_NUMBER": cprops.get("CLAIM_NUMBER"),
+                "CLAIM_STATUS_CODE": cprops.get("CLAIM_STATUS_CODE"),
+            }
+        )
+    claims_on_policy = pd.DataFrame(claim_rows)
+
+    summary = (
+        f"Policy {pid}: {len(people_rows)} person–policy link(s), {len(claim_rows)} claim(s) "
+        "filed against this policy."
+    )
+    explanation_plain = (
+        f"Policy **`{pprops.get('POLICY_NUMBER') or pid}`** (`{pid}`): tables list **every person** "
+        "with `IS_COVERED_BY` or `SOLD_POLICY` to this policy, and **every claim** with "
+        "`IS_CLAIM_AGAINST_POLICY` into it."
+    )
+    evidence: list[str] = []
+    for _, r in people_on_policy.iterrows():
+        evidence.append(f"{r['person_node_id']} —[{r['relationship_to_policy']}]→ {pid}")
+    for _, r in claims_on_policy.iterrows():
+        evidence.append(f"{r['claim_node_id']} —[IS_CLAIM_AGAINST_POLICY]→ {pid}")
+
+    return {
+        "summary": summary,
+        "explanation_plain": explanation_plain,
+        "evidence_bullets": evidence,
+        "policy_node_id": pid,
+        "policy": policy_df,
+        "people_on_policy": people_on_policy,
+        "claims_on_policy": claims_on_policy,
+    }
+
+
 def find_shared_bank_accounts() -> dict:
     """
     Find **BankAccount** nodes held by **two or more people** (``HOLD_BY``).
@@ -680,15 +1030,7 @@ def find_related_people_clusters() -> dict:
     ``evidence_bullets`` (person–person ties used).
     """
     G = _require_graph()
-    PERSON_EDGE_TYPES = frozenset(
-        {
-            "IS_SPOUSE_OF",
-            "IS_RELATED_TO",
-            "ACT_ON_BEHALF_OF",
-            "HIPAA_AUTHORIZED_ON",
-            "DIAGNOSED_BY",
-        }
-    )
+    PERSON_EDGE_TYPES = PERSON_TO_PERSON_RELATIONSHIP_TYPES
 
     U = nx.Graph()
     edge_notes: list[tuple[str, str, str]] = []
@@ -842,6 +1184,248 @@ def find_business_connection_patterns() -> dict:
     }
 
 
+def search_nodes(
+    query: str,
+    *,
+    node_type: str | None = None,
+    limit: int = 40,
+) -> dict[str, Any]:
+    """
+    Find nodes whose **label** or key **properties** contain ``query`` (case-insensitive).
+
+    Optional ``node_type`` filters to a single type (e.g. ``Person``, ``Claim``, ``Policy``).
+    Returns a small table for disambiguation before calling more specific tools.
+    """
+    G = _require_graph()
+    q = (query or "").strip()
+    if not q:
+        return {
+            "summary": "Empty query.",
+            "matches": pd.DataFrame(),
+        }
+
+    q_lower = q.lower()
+    rows: list[dict[str, Any]] = []
+
+    for nid, data in G.nodes(data=True):
+        nt = str(data.get("node_type") or "")
+        if node_type and nt != node_type:
+            continue
+        label = str(data.get("label") or "")
+        if q_lower in label.lower():
+            rows.append(
+                {
+                    "node_id": nid,
+                    "node_type": nt,
+                    "label": label,
+                    "match_reason": "label",
+                }
+            )
+            continue
+        props = _parse_properties_json(data.get("properties_json"))
+        blob = " ".join(str(v) for v in props.values() if v is not None).lower()
+        if q_lower in blob:
+            rows.append(
+                {
+                    "node_id": nid,
+                    "node_type": nt,
+                    "label": label,
+                    "match_reason": "properties",
+                }
+            )
+
+    rows.sort(key=lambda r: (r["node_type"], r["node_id"]))
+    df = pd.DataFrame(rows[: max(1, min(limit, 200))])
+    summary = f"search_nodes({q!r}" + (f", node_type={node_type!r}" if node_type else "") + f"): {len(df)} match(es)."
+    return {"summary": summary, "matches": df, "query": q, "node_type_filter": node_type}
+
+
+def get_person_policies(person_node_id: str) -> dict[str, Any]:
+    """
+    List every **Policy** linked from a **Person** via ``IS_COVERED_BY`` or ``SOLD_POLICY``.
+
+    This answers “what policies is this person tied to?” without starting from a Claim.
+    Directed edges follow the CSV: **Person → Policy** for those relationship types.
+    """
+    G = _require_graph()
+    if person_node_id not in G:
+        raise KeyError(f"Unknown node_id: {person_node_id!r}")
+    if G.nodes[person_node_id].get("node_type") != "Person":
+        raise ValueError(f"Node {person_node_id!r} is not a Person node")
+
+    rows: list[dict[str, Any]] = []
+    for succ in G.successors(person_node_id):
+        if G.nodes[succ].get("node_type") != "Policy":
+            continue
+        et = G.edges[person_node_id, succ].get("edge_type")
+        if et not in ("IS_COVERED_BY", "SOLD_POLICY"):
+            continue
+        dpol = _node_row(G, succ)
+        pprops = dpol["parsed_props"]
+        rows.append(
+            {
+                "person_node_id": person_node_id,
+                "relationship_to_policy": et,
+                "policy_node_id": succ,
+                "policy_label": dpol.get("label"),
+                "POLICY_NUMBER": pprops.get("POLICY_NUMBER"),
+                "POLICY_STATUS": pprops.get("POLICY_STATUS"),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    plab = G.nodes[person_node_id].get("label") or person_node_id
+    if df.empty:
+        explanation_plain = (
+            f"No **Policy** nodes are linked from **{plab}** (`{person_node_id}`) with "
+            "**IS_COVERED_BY** or **SOLD_POLICY** in this extract."
+        )
+    else:
+        explanation_plain = (
+            f"Person **{plab}** (`{person_node_id}`) has **{len(df)}** policy link(s) "
+            "in the graph (insured and/or writing-agent roles)."
+        )
+
+    evidence: list[str] = []
+    for _, r in df.iterrows():
+        evidence.append(
+            f"{r['person_node_id']} —[{r['relationship_to_policy']}]→ {r['policy_node_id']}"
+        )
+
+    summary = f"Person {person_node_id}: {len(df)} policy link(s)."
+
+    return {
+        "summary": summary,
+        "explanation_plain": explanation_plain,
+        "evidence_bullets": evidence,
+        "person_node_id": person_node_id,
+        "policies": df,
+    }
+
+
+def policies_with_related_coparties(person_node_id: str) -> dict[str, Any]:
+    """
+    Policies where **two conditions** both hold:
+
+    1. The **anchor person** is linked to the policy via ``IS_COVERED_BY`` or ``SOLD_POLICY``.
+    2. Some **other person** on that **same policy** has a **direct** person→person
+       tie with the anchor using the same relationship types as
+       :func:`find_related_people_clusters` (spouse, related-to, POA-style, etc.).
+
+    This answers questions like: “Is this person on any policy with someone they are
+    personally related to?” — without using claims.
+    """
+    G = _require_graph()
+    if person_node_id not in G:
+        raise KeyError(f"Unknown node_id: {person_node_id!r}")
+    if G.nodes[person_node_id].get("node_type") != "Person":
+        raise ValueError(f"Node {person_node_id!r} is not a Person node")
+
+    anchor = person_node_id
+    plab = G.nodes[anchor].get("label") or anchor
+
+    # Direct personal ties: other Person -> list of directed edge descriptions
+    related_lines: dict[str, list[str]] = {}
+    for other in G.nodes():
+        if other == anchor or G.nodes[other].get("node_type") != "Person":
+            continue
+        lines: list[str] = []
+        if G.has_edge(anchor, other):
+            et = G.edges[anchor, other].get("edge_type")
+            if et in PERSON_TO_PERSON_RELATIONSHIP_TYPES:
+                lines.append(f"{anchor} —[{et}]→ {other}")
+        if G.has_edge(other, anchor):
+            et = G.edges[other, anchor].get("edge_type")
+            if et in PERSON_TO_PERSON_RELATIONSHIP_TYPES:
+                lines.append(f"{other} —[{et}]→ {anchor}")
+        if lines:
+            related_lines[other] = lines
+
+    policy_roles: dict[str, list[tuple[str, str]]] = {}
+    for succ in G.successors(anchor):
+        if G.nodes[succ].get("node_type") != "Policy":
+            continue
+        et = G.edges[anchor, succ].get("edge_type")
+        if et not in ("IS_COVERED_BY", "SOLD_POLICY"):
+            continue
+        pid = succ
+        if pid not in policy_roles:
+            policy_roles[pid] = []
+        policy_roles[pid].append((anchor, et))
+
+    out_rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for pid, anchor_pairs in policy_roles.items():
+        # Everyone on this policy (same edge types as claim_network party collection)
+        coparties: list[tuple[str, str]] = []
+        for pred in G.predecessors(pid):
+            if G.nodes[pred].get("node_type") != "Person":
+                continue
+            et = G.edges[pred, pid].get("edge_type")
+            if et in ("IS_COVERED_BY", "SOLD_POLICY"):
+                coparties.append((pred, et))
+
+        dpol = _node_row(G, pid)
+        pprops = dpol["parsed_props"]
+
+        for other, other_role in coparties:
+            if other == anchor:
+                continue
+            if other not in related_lines:
+                continue
+            key = (pid, other, "|".join(sorted(related_lines[other])))
+            if key in seen:
+                continue
+            seen.add(key)
+            for anchor_role in {r for p, r in anchor_pairs if p == anchor}:
+                out_rows.append(
+                    {
+                        "policy_node_id": pid,
+                        "POLICY_NUMBER": pprops.get("POLICY_NUMBER"),
+                        "policy_label": dpol.get("label"),
+                        "anchor_relationship_to_policy": anchor_role,
+                        "related_person_node_id": other,
+                        "related_person_label": G.nodes[other].get("label", other),
+                        "related_person_role_on_policy": other_role,
+                        "person_person_ties": " ; ".join(related_lines[other]),
+                    }
+                )
+
+    df = pd.DataFrame(out_rows)
+    if df.empty:
+        explanation_plain = (
+            f"**{plab}** (`{anchor}`) has **no** policy in this extract where another party "
+            "on the **same** policy also has a **direct** spouse/family/POA-style person→person "
+            "link with them. (They may still share policies with unrelated parties.)"
+        )
+    else:
+        explanation_plain = (
+            f"Found **{len(df)}** policy–side pairing(s): **{plab}** shares a policy with "
+            "someone they are **directly** tied to via a person→person relationship "
+            "(same edge types as family/social clusters)."
+        )
+
+    evidence = [
+        f"{r['policy_node_id']}: anchor {anchor} ({r['anchor_relationship_to_policy']}); "
+        f"related {r['related_person_node_id']} ({r['related_person_role_on_policy']}); "
+        f"ties: {r['person_person_ties']}"
+        for r in out_rows
+    ]
+
+    summary = (
+        f"Person {anchor}: {len(df)} policy row(s) where a related person co-appears on the policy."
+    )
+
+    return {
+        "summary": summary,
+        "explanation_plain": explanation_plain,
+        "evidence_bullets": evidence,
+        "person_node_id": anchor,
+        "table": df,
+    }
+
+
 def _print_section(title: str, explanation: str) -> None:
     bar = "=" * 72
     print(f"\n{bar}\n{title}\n{bar}")
@@ -866,12 +1450,13 @@ def main() -> None:
     )
     pprint(summarize_graph())
 
-    demo_claim = "claim_C9000000002"
+    demo_claim = "Claim|C001"
     _print_section(
         f'get_claim_network("{demo_claim}")',
         "Starts at a Claim, walks to its Policy, lists other claims on that policy, "
-        "lists every Person tied to the policy (insured or agent), and matches the "
-        "claim’s claimant fields to a Person node when names and birth date align.",
+        "lists people tied to the **claim** (direct or via non-policy entities), people tied "
+        "to the policy (insured or agent), and matches the claim’s claimant fields to a Person "
+        "node when names and birth date align.",
     )
     net = get_claim_network(demo_claim)
     print(net["summary"])
@@ -883,6 +1468,7 @@ def main() -> None:
         "claim",
         "linked_policies",
         "other_claims_on_policy",
+        "people_linked_to_claim",
         "people_linked_to_policy",
         "claimant_person_match",
     ):
