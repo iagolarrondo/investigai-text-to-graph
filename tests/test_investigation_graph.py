@@ -1,20 +1,21 @@
-"""Tests for investigation summary subgraph anchor extraction."""
+"""Tests for investigation summary subgraph anchor extraction and hop-ego view."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-import pytest
+import networkx as nx
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.app.investigation_graph import (  # noqa: E402
+    compute_hop_ego_visible,
+    compute_summary_visible_nodes,
     extract_node_ids_from_text,
     gather_investigation_anchors,
-    infer_summary_view_mode,
 )
 from src.llm.tool_agent import ToolAgentResult, ToolAgentStep  # noqa: E402
 
@@ -44,36 +45,37 @@ def test_gather_investigation_anchors_merges_input_and_text() -> None:
     assert "Policy|POL001" in anchors
 
 
-def test_infer_summary_view_mode_tools() -> None:
-    tr_p2p = ToolAgentResult(
-        question="Map clusters",
-        steps=[ToolAgentStep(tool="find_related_people_clusters", input={}, result_preview="")],
-        final_text="",
-    )
-    assert infer_summary_view_mode(tr_p2p) == "p2p"
-
-    tr_claim = ToolAgentResult(
-        question="Who on the policy",
-        steps=[ToolAgentStep(tool="get_claim_network", input={"claim_node_id": "Claim|C001"}, result_preview="")],
-        final_text="",
-    )
-    assert infer_summary_view_mode(tr_claim) == "claims_policies"
-
-    tr_bank = ToolAgentResult(
-        question="Joint accounts",
-        steps=[ToolAgentStep(tool="find_shared_bank_accounts", input={}, result_preview="")],
-        final_text="",
-    )
-    assert infer_summary_view_mode(tr_bank) == "financial"
+def test_compute_hop_ego_visible_includes_neighbors() -> None:
+    G = nx.DiGraph()
+    G.add_node("Person|1", node_type="Person", label="A", properties_json="{}")
+    G.add_node("Claim|C1", node_type="Claim", label="C", properties_json="{}")
+    G.add_edge("Person|1", "Claim|C1", edge_type="X")
+    vis = compute_hop_ego_visible(G, "Person|1", hop_depth=2, max_nodes=50)
+    assert "Person|1" in vis
+    assert "Claim|C1" in vis
 
 
-def test_infer_summary_view_mode_question_p2p() -> None:
+def test_compute_summary_visible_nodes_uses_synthesis_focus() -> None:
+    G = nx.DiGraph()
+    G.add_node("Person|1", node_type="Person", label="A", properties_json="{}")
+    G.add_node("Claim|C1", node_type="Claim", label="C", properties_json="{}")
+    G.add_edge("Person|1", "Claim|C1", edge_type="X")
     tr = ToolAgentResult(
-        question="What is the relationship between these two people?",
-        steps=[ToolAgentStep(tool="search_nodes", input={"query": "Jane"}, result_preview="")],
+        question="q",
+        steps=[
+            ToolAgentStep(tool="search_nodes", input={"query": "x"}, result_preview="Person|1"),
+        ],
         final_text="",
+        graph_focus_node_id="Claim|C1",
     )
-    assert infer_summary_view_mode(tr) == "p2p"
+    anchors = gather_investigation_anchors(tr)
+    vis, focus, mode, edge_f, cap = compute_summary_visible_nodes(G, tr, anchors, hop_depth=2)
+    assert mode == "hop_ego"
+    assert focus == "Claim|C1"
+    assert "Claim|C1" in vis
+    assert "Person|1" in vis
+    assert edge_f is None
+    assert cap and "Claim|C1" in cap
 
 
 def test_gather_investigation_anchors_neighbor_tool() -> None:

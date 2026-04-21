@@ -2,10 +2,9 @@
 InvestigAI PoC v1 — Streamlit UI.
 
 Loads the graph from ``data/processed/*.csv`` (via ``query_graph``). Investigation
-runs through a single path: **Claude tool-planner** — it chooses and executes
-``query_graph`` tools (search, claim network, relationship catalog, …) in
-multiple steps, then answers in natural language. Set ``ANTHROPIC_API_KEY`` in
-``.env``.
+runs through an LLM **tool-planner** → **coverage judge** (full tool trace, uncapped
+outer loop) → **synthesis** (user-visible answer + graph focus). Set ``INVESTIGATION_LLM`` to
+``gemini`` (``GEMINI_API_KEY``), ``anthropic`` (``ANTHROPIC_API_KEY``), or ``ollama`` (local Ollama; see README).
 
 How to run (from the **project root**, the folder that contains ``src/``)::
 
@@ -37,7 +36,6 @@ import streamlit.components.v1 as components  # noqa: E402
 
 from src.app.graph_viz import build_pyvis_html  # noqa: E402
 from src.app.investigation_graph import (  # noqa: E402
-    SUMMARY_VIEW_CAPTIONS,
     compute_summary_visible_nodes,
     gather_investigation_anchors,
 )
@@ -68,12 +66,12 @@ def _render_investigation_graph(tr: ToolAgentResult) -> None:
             value=1,
             key="inv_graph_hop",
             help=(
-                "Claim/policy questions use a **tight tool-aligned slice** first (hop may apply to fallbacks). "
-                "For **person–person** mode, hops follow only personal-tie edges. "
-                "Increase hops to widen neighbourhood views. Does not re-run the LLM."
+                "The graph centers on one **focus** node (synthesis focus when set, otherwise anchors from the run), "
+                "then includes every node within this many **undirected** hops on the full link chart. "
+                "Does not re-run the LLM."
             ),
         )
-        visible, focus, view_mode, edge_filter, slice_hint = compute_summary_visible_nodes(
+        visible, focus, _mode, edge_filter, slice_hint = compute_summary_visible_nodes(
             G, tr, anchors, hop_depth=hop
         )
         if not visible:
@@ -82,12 +80,11 @@ def _render_investigation_graph(tr: ToolAgentResult) -> None:
                 "or in the answer text). Run a question that resolves specific entities, or check the tool steps."
             )
             return
-        st.caption(SUMMARY_VIEW_CAPTIONS.get(view_mode, SUMMARY_VIEW_CAPTIONS["neighbourhood"]))
         if slice_hint:
             st.caption(slice_hint)
         st.caption(
             f"**{len(visible)}** nodes · **{len({a for a in anchors if a in G})}** anchor(s) · hop **{hop}** "
-            "(anchors prioritize **tool inputs**, then tool results, then the written answer)."
+            "(focus: synthesis **graph_focus** when present, else tool inputs → results → answer)."
         )
         html = build_pyvis_html(
             G,
@@ -104,7 +101,7 @@ def _render_investigation_graph(tr: ToolAgentResult) -> None:
 
 
 def _render_tool_planner_result(tr: ToolAgentResult) -> None:
-    """Trace of tool calls + final narrative from :func:`run_tool_planner_agent`."""
+    """Tool trace, judge rounds (internal), synthesis answer, and summary graph."""
     st.subheader("Investigation")
     if tr.error:
         st.error(tr.error)
@@ -112,8 +109,24 @@ def _render_tool_planner_result(tr: ToolAgentResult) -> None:
     if not tr.steps and not tr.final_text:
         st.warning("No tool steps and no answer returned.")
         return
-    st.caption(f"Model rounds (API calls): **{tr.raw_messages}**")
+    st.caption(
+        f"Planner API calls (this run): **{tr.raw_messages}** · "
+        "User-facing prose is **only** from synthesis below."
+    )
+    if getattr(tr, "judge_rounds", None):
+        st.subheader("Reviewer (coverage)")
+        for j, jr in enumerate(tr.judge_rounds, start=1):
+            label = "Satisfied — proceed to synthesis" if jr.satisfied else "Not satisfied — more tools"
+            with st.expander(f"Round {j}: {label}", expanded=False):
+                st.markdown(jr.rationale)
+                if jr.feedback_for_planner:
+                    st.text(jr.feedback_for_planner)
+
+    current_phase: int | None = None
     for i, step in enumerate(tr.steps, start=1):
+        if current_phase != step.planner_phase:
+            current_phase = step.planner_phase
+            st.markdown(f"**Planner phase {current_phase}**")
         preview = step.result_preview
         if len(preview) > 12000:
             preview = preview[:12000] + "\n\n…(truncated for display)…"
@@ -123,9 +136,13 @@ def _render_tool_planner_result(tr: ToolAgentResult) -> None:
     st.divider()
     st.subheader("Answer")
     if tr.final_text:
-        st.info(tr.final_text)
+        st.markdown(tr.final_text)
     else:
-        st.caption("_(No final narrative — inspect tool steps above.)_")
+        st.caption("_(No synthesis answer — inspect tool steps and errors above.)_")
+    if getattr(tr, "synthesis_rationale", ""):
+        st.caption(f"Graph focus rationale: {tr.synthesis_rationale}")
+    if getattr(tr, "graph_focus_node_id", None):
+        st.caption(f"Synthesis graph focus: `{tr.graph_focus_node_id}`")
     _render_investigation_graph(tr)
 
 
@@ -138,8 +155,8 @@ def main() -> None:
 
     st.title("InvestigAI")
     st.caption(
-        "LTC investigation copilot — **Claude** plans graph tool calls from your question "
-        "(set `ANTHROPIC_API_KEY` in `.env`)."
+        "LTC investigation copilot — an LLM **plans tools**, a **reviewer** checks coverage on the full trace, "
+        "then **synthesis** writes the answer you see."
     )
 
     try:
@@ -175,7 +192,7 @@ def main() -> None:
             st.warning("Enter a question, then click **Run investigation**.")
         else:
             try:
-                with st.spinner("Running investigation (Claude + graph tools)…"):
+                with st.spinner("Running investigation (LLM + graph tools)…"):
                     st.session_state["last_tool_run"] = run_tool_planner_agent(q)
             except Exception as exc:
                 st.error("Run failed — see details below.")
