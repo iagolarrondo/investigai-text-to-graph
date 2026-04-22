@@ -18,6 +18,7 @@ If Streamlit cannot import ``src``, set PYTHONPATH to the project root::
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import streamlit as st
@@ -109,30 +110,46 @@ def _render_tool_planner_result(tr: ToolAgentResult) -> None:
     if not tr.steps and not tr.final_text:
         st.warning("No tool steps and no answer returned.")
         return
-    st.caption(
-        f"Planner API calls (this run): **{tr.raw_messages}** · "
-        "User-facing prose is **only** from synthesis below."
-    )
-    if getattr(tr, "judge_rounds", None):
-        st.subheader("Reviewer (coverage)")
-        for j, jr in enumerate(tr.judge_rounds, start=1):
-            label = "Satisfied — proceed to synthesis" if jr.satisfied else "Not satisfied — more tools"
-            with st.expander(f"Round {j}: {label}", expanded=False):
-                st.markdown(jr.rationale)
-                if jr.feedback_for_planner:
-                    st.text(jr.feedback_for_planner)
+    # 1) Tool evaluation
+    st.subheader("Tool evaluation")
+    pf = getattr(tr, "preflight", None)
+    ex = getattr(tr, "extension_authoring", None)
+    if pf or ex:
+        with st.expander("Details", expanded=False):
+            if pf:
+                st.json(pf)
+            if ex:
+                st.markdown("**Extension authoring**")
+                st.json(ex)
+    else:
+        st.caption("_(No tool evaluation info for this run.)_")
 
+    # 2) Tool steps
+    st.subheader("Tool steps")
     current_phase: int | None = None
     for i, step in enumerate(tr.steps, start=1):
         if current_phase != step.planner_phase:
             current_phase = step.planner_phase
-            st.markdown(f"**Planner phase {current_phase}**")
+            if current_phase != 0:
+                st.markdown(f"**Planner phase {current_phase}**")
         preview = step.result_preview
         if len(preview) > 12000:
             preview = preview[:12000] + "\n\n…(truncated for display)…"
         with st.expander(f"Step {i}: `{step.tool}`", expanded=(i == 1 and len(tr.steps) <= 3)):
             st.json(step.input)
             st.text(preview)
+
+    # 3) Reviewer
+    st.subheader("Reviewer")
+    if getattr(tr, "judge_rounds", None):
+        for jr in tr.judge_rounds:
+            label = "Satisfied — proceed to synthesis" if jr.satisfied else "Not satisfied — more tools"
+            with st.expander(label, expanded=False):
+                st.markdown(jr.rationale)
+                if jr.feedback_for_planner:
+                    st.text(jr.feedback_for_planner)
+    else:
+        st.caption("_(No reviewer rounds recorded.)_")
     st.divider()
     st.subheader("Answer")
     if tr.final_text:
@@ -154,9 +171,12 @@ def main() -> None:
     )
 
     st.title("InvestigAI")
-    st.caption(
-        "LTC investigation copilot — an LLM **plans tools**, a **reviewer** checks coverage on the full trace, "
-        "then **synthesis** writes the answer you see."
+    st.subheader("LTC investigation copilot")
+    st.markdown(
+        "**Tool evaluation** checks whether the current graph tools fit your question (and may run **extension authoring** "
+        "when enabled). The LLM then executes **tool steps**—real graph queries—with a **per-investigation step cap**. "
+        "A **reviewer** reads the **full** tool trace for coverage; if gaps remain, planning can repeat. "
+        "**Synthesis** turns the trace into the **answer** (and graph focus) below."
     )
 
     try:
@@ -192,8 +212,29 @@ def main() -> None:
             st.warning("Enter a question, then click **Run investigation**.")
         else:
             try:
-                with st.spinner("Running investigation (LLM + graph tools)…"):
-                    st.session_state["last_tool_run"] = run_tool_planner_agent(q)
+                status = st.empty()
+                recent = st.empty()
+                start = time.time()
+                events: list[str] = []
+
+                def _progress_cb(ev: dict) -> None:
+                    et = str(ev.get("type", "")).strip()
+                    msg = str(ev.get("message", "")).strip()
+                    if not msg:
+                        if et == "tool_start":
+                            msg = f"Running tool: `{ev.get('tool')}`…"
+                        elif et == "tool_done":
+                            msg = f"Tool complete: `{ev.get('tool')}`"
+                        else:
+                            msg = et or "Working…"
+                    elapsed = int(time.time() - start)
+                    status.markdown(f"**Working…** {msg}  \n_(elapsed: {elapsed}s)_")
+                    events.append(msg)
+                    tail = events[-6:]
+                    recent.markdown("**Recent activity**\n\n" + "\n".join(f"- {t}" for t in tail))
+
+                with st.spinner("Working…"):
+                    st.session_state["last_tool_run"] = run_tool_planner_agent(q, progress_cb=_progress_cb)
             except Exception as exc:
                 st.error("Run failed — see details below.")
                 st.exception(exc)

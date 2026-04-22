@@ -1,0 +1,32 @@
+[
+  {
+    "name": "claims_agent_insured_shared_bank",
+    "module": "claims_agent_insured_shared_bank",
+    "description": "For every Claim in the graph, finds the writing agent of the claim's policy and checks whether any insured on that same policy shares a bank account with that agent. Returns a list of matches with (claim_id, policy_id, agent_id, insured_id, bank_account_id). Use when the question asks about insureds sharing a bank account with the writing agent of a claim's policy.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of result rows to return (default 200, max 1000).",
+          "default": 200
+        }
+      },
+      "required": []
+    },
+    "active": true,
+    "created_at": "2026-04-22T01:39:05.088873+00:00"
+  },
+  {
+    "name": "claims_agent_insured_shared_phone",
+    "module": "claims_agent_insured_shared_phone",
+    "description": "For every Claim in the graph, finds the writing agent of the claim's policy and checks whether any insured on that same policy shares a phone number with that agent. Returns a list of matches with (claim_id, policy_id, agent_id, insured_id, shared_phone). Use when the question asks about insureds sharing a phone number with the writing agent of a claim's policy.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "active": true,
+    "created_at": "2026-04-22T01:43:41.485182+00:00"
+  }
+]

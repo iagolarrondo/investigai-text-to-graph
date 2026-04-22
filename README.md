@@ -32,6 +32,8 @@ The UI is **`src/app/app.py`**. Everything below happens **on your machine** usi
 5. **All graph math is deterministic** — traversal lives in **`src/graph_query/query_graph.py`**. The LLM **selects tools** and **writes prose**; it does not invent edges.
 6. Below the **Answer**, an **Investigation graph** (pyvis) appears **once per run**: one **focus** node (synthesis ``graph_focus_node_id`` when set, otherwise heuristics from anchors), then an **undirected N-hop ball** on the full graph (all node and edge types in range). The hop slider widens or tightens that neighbourhood without re-running the LLM. Use the **Interactive Graph** page for unconstrained exploration. There are no separate graphs per tool step.
 
+**Preflight and optional extensions** — Before the planner, a **preflight** LLM pass classifies whether the **current** tool catalog can answer the question fully and efficiently (`sufficient` / `insufficient` / `sufficient_but_inefficient`) and may suggest a short plan; that text is appended to the planner’s first user turn when present. With **`INVESTIGATION_EXTENSION_AUTHORING=1`** (see **`.env.example`**), a non-`sufficient` preflight can trigger **code authoring**: a new module under **`src/graph_query/generated/`**, an entry in **`src/graph_query/extension_registry.json`**, and a **`pytest`** smoke gate (`tests/test_graph_extensions_smoke.py`). Successful extensions merge into the tool list for the rest of the run and after restart; **commit** those files to share. Default is authoring **off**.
+
 **Tools (high level)** — Include `get_graph_relationship_catalog`, `search_nodes`, `get_neighbors`, `summarize_graph`, `get_claim_network`, `get_claim_subgraph_summary`, `get_person_subgraph_summary`, `get_policy_network`, `get_person_policies`, `policies_with_related_coparties`, `find_shared_bank_accounts`, `find_related_people_clusters`, `find_business_connection_patterns`. See **§2.4** for schema introspection.
 
 **Copilot prompts** (`SYSTEM_COPILOT_ANSWER`, intent router JSON, few-shots) remain available for other entrypoints; the main Streamlit investigation path is planner → judge → synthesis only.
@@ -44,7 +46,7 @@ The UI is **`src/app/app.py`**. Everything below happens **on your machine** usi
 
 **Local Ollama** — Install [Ollama](https://ollama.com/), run `ollama serve` (or use the desktop app), pull a model that supports **tool calling** (for example `ollama pull llama3.1`). In **`.env`**, set **`INVESTIGATION_LLM=ollama`** (or **`local`**). Optional: **`OLLAMA_HOST`** (default `http://127.0.0.1:11434`), **`OLLAMA_MODEL`** (default `llama3.1`), **`OLLAMA_TIMEOUT`** (HTTP timeout in seconds for each Ollama request; default **600**, use **`0`** for no timeout). Quality and JSON reliability vary by model; if tools misfire, try another tool-capable tag from the Ollama library.
 
-**Planner speed:** Each **tool round** is a separate model call inside a planner segment, and each **planner segment** can repeat after the judge. Defaults (when **`INVESTIGATION_PLANNER_MAX_ROUNDS`** is unset): **14** tool rounds per segment for **Gemini** and **Anthropic**, **12** for **Ollama** — raise (e.g. `20`) for depth, or lower (e.g. `8`) for speed. Optional **`INVESTIGATION_MAX_PLANNER_PHASES`** caps outer planner–judge cycles before synthesis (e.g. **`2`**); omit for unlimited. For **Ollama**, `1` is fastest but often shallow; **`2`–`4`** balances depth and time.
+**Planner speed:** Each **tool round** is a separate model call inside a planner segment, and each **planner segment** can repeat after the judge. Defaults (when **`INVESTIGATION_PLANNER_MAX_ROUNDS`** is unset): **14** tool rounds per segment for **Gemini** and **Anthropic**, **12** for **Ollama** — raise (e.g. `20`) for depth, or lower (e.g. `8`) for speed. Optional **`INVESTIGATION_MAX_PLANNER_PHASES`** caps outer planner–judge cycles before synthesis (e.g. **`2`**); omit for unlimited. For **Ollama**, `1` is fastest but often shallow; **`2`–`4`** balances depth and time. Independently, **`INVESTIGATION_MAX_TOOL_STEPS`** caps **recorded tool executions** per investigation across all planner phases (default **20**; set **`0`** for no cap). See **`.env.example`**.
 
 **Ollama can feel slow or “stuck”** because each investigation runs many **sequential** calls with a **large** prompt. Mitigations: **GPU** / larger quant, the limits above, and **`OLLAMA_TIMEOUT`**.
 
@@ -64,12 +66,13 @@ The tool planner exposes this as the **`get_graph_relationship_catalog`** tool s
 
 ```text
 User question
+        → (optional) Tool preflight on catalog → (optional) extension authoring + registry merge
         → LLM tool-calling loop (Gemini, Anthropic, or Ollama) → query_graph.* (zero or more tool calls per planner phase)
         → Coverage judge on full trace → repeat if needed
         → Synthesis → Streamlit: tool trace + reviewer rounds + Answer + investigation graph
 ```
 
-**Interactive Graph** (`src/app/pages/1_Interactive_Graph.py`) uses pyvis; the **Node inspector** and sidebar **Focus node** share one focus so choosing a node updates the N-hop subgraph the same as clicking that node in the view. The main investigation page focuses on the tool trace and answer.
+**Full Interactive Graph** (`src/app/pages/1_Full_Interactive_Graph.py`) uses pyvis; the **Node inspector** and sidebar **Focus node** share one focus so choosing a node updates the N-hop subgraph the same as clicking that node in the view. The main investigation page focuses on the tool trace and answer.
 
 ---
 
@@ -80,7 +83,7 @@ User question
 | `data/interim/poc_v1_seed/` | Input CSV extracts when using the bundled builder (policies, claims, resolved people, etc.). |
 | `data/processed/` | **Graph used at runtime:** `nodes.csv`, `edges.csv` (from the build script or an external export). |
 | `src/graph_build/` | Builds graph CSVs from the seed (`build_graph_files.py`). |
-| `src/graph_query/` | Loads the graph and runs investigation-style queries. |
+| `src/graph_query/` | Loads the graph and runs investigation-style queries; optional **`extension_registry.json`** + **`generated/*.py`** for LLM-authored tools. |
 | `src/llm/` | **Tool planner** (`tool_agent.py`), **Gemini** (`gemini_llm.py`), **Anthropic** (`anthropic_llm.py`), **Ollama** (`local_ollama.py`), **orchestrator** (`orchestration.py`), **prompts** (`prompts.py`), **result text** (`result_serialize.py`). |
 | `src/app/` | Streamlit UI: **`app.py`** (planner → judge → synthesis + summary graph); **`investigation_graph.py`** (focus + hop-ego subgraph for the main app); optional **pages** under `src/app/pages/`. |
 | `tests/` | Smoke tests on processed CSVs (supports builder and Neo4j column layouts). |

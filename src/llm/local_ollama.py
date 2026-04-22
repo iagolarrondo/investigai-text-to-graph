@@ -93,6 +93,7 @@ def run_planner_phase_ollama(
     append_tool_step: Callable[[str, dict[str, Any], str, int], None],
     planner_phase: int,
     max_rounds: int = 14,
+    max_total_tool_steps: int | None = None,
 ) -> tuple[list[Any], int]:
     """
     Tool-use loop via Ollama (manual tool execution).
@@ -103,6 +104,8 @@ def run_planner_phase_ollama(
     tools = graph_tools_for_ollama(graph_tool_specs)
     api_calls = 0
     while api_calls < max_rounds:
+        if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+            break
         try:
             r = client.chat(
                 model=model,
@@ -122,8 +125,19 @@ def run_planner_phase_ollama(
             tname, tinp = _tool_call_name_args(tc)
             if not tname:
                 continue
-            body_full = execute_tool(tname, tinp, for_model=False)
-            body_api = truncate_for_model(body_full)
-            append_tool_step(tname, tinp, body_full, planner_phase)
+            if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+                body_full = (
+                    "STOPPED_TOOLING: Tool-step cap reached — this tool call was not executed "
+                    f"(cap={max_total_tool_steps})."
+                )
+                body_api = truncate_for_model(body_full)
+            else:
+                body_full = execute_tool(tname, tinp, for_model=False)
+                body_api = truncate_for_model(body_full)
+                append_tool_step(tname, tinp, body_full, planner_phase)
             messages.append({"role": "tool", "tool_name": tname, "content": body_api})
+            if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+                break
+        if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+            break
     return messages, api_calls

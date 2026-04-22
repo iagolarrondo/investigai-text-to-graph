@@ -91,6 +91,7 @@ def run_planner_phase_genai(
     append_tool_step: Callable[[str, dict[str, Any], str, int], None],
     planner_phase: int,
     max_rounds: int = 14,
+    max_total_tool_steps: int | None = None,
 ) -> tuple[list[types.Content], int]:
     """
     Tool-use loop using Gemini function calling (manual execution; automatic calling disabled).
@@ -113,6 +114,8 @@ def run_planner_phase_genai(
 
     api_calls = 0
     while api_calls < max_rounds:
+        if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+            break
         resp = client.models.generate_content(
             model=model,
             contents=contents,
@@ -144,9 +147,16 @@ def run_planner_phase_genai(
             tname = (fc.name or "").strip()
             raw_args = fc.args
             tinp = dict(raw_args) if isinstance(raw_args, dict) else (dict(raw_args) if raw_args else {})
-            body_full = execute_tool(tname, tinp, for_model=False)
-            body_api = truncate_for_model(body_full)
-            append_tool_step(tname, tinp, body_full, planner_phase)
+            if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+                body_full = (
+                    "STOPPED_TOOLING: Tool-step cap reached — this tool call was not executed "
+                    f"(cap={max_total_tool_steps})."
+                )
+                body_api = truncate_for_model(body_full)
+            else:
+                body_full = execute_tool(tname, tinp, for_model=False)
+                body_api = truncate_for_model(body_full)
+                append_tool_step(tname, tinp, body_full, planner_phase)
             fr_parts.append(
                 types.Part(
                     function_response=types.FunctionResponse(
@@ -156,7 +166,11 @@ def run_planner_phase_genai(
                     )
                 )
             )
+            if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+                break
 
         contents.append(types.Content(role="user", parts=fr_parts))
+        if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+            break
 
     return contents, api_calls

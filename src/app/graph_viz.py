@@ -1,7 +1,7 @@
 """
 Shared interactive graph visualization (pyvis + vis.js) for Streamlit.
 
-Used by the main app (result subgraph) and the Interactive Graph page.
+Used by the main app (result subgraph) and the Full Interactive Graph page.
 """
 
 from __future__ import annotations

@@ -146,7 +146,7 @@ def normalize_claim_node_id(raw: str) -> str:
 
 
 # Tool definitions (JSON Schema subset; used by the Gemini planner)
-GRAPH_TOOLS: list[dict[str, Any]] = [
+_CORE_GRAPH_TOOLS: list[dict[str, Any]] = [
     {
         "name": "summarize_graph",
         "description": (
@@ -351,6 +351,21 @@ GRAPH_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+GRAPH_TOOLS: list[dict[str, Any]] = list(_CORE_GRAPH_TOOLS)
+
+_EXTENSION_HANDLERS: dict[str, Any] = {}
+
+
+def refresh_graph_tools_with_extensions() -> None:
+    """Reload ``extension_registry.json`` and merge active tools into :data:`GRAPH_TOOLS` and dispatch."""
+    from src.graph_query.extension_loader import active_extension_specs, load_extension_handlers
+
+    GRAPH_TOOLS.clear()
+    GRAPH_TOOLS.extend(_CORE_GRAPH_TOOLS)
+    GRAPH_TOOLS.extend(active_extension_specs())
+    _EXTENSION_HANDLERS.clear()
+    _EXTENSION_HANDLERS.update(load_extension_handlers())
+
 
 def _truncate(s: str, limit: int = MAX_TOOL_CHARS) -> str:
     s = s.strip()
@@ -404,6 +419,13 @@ def _format_tool_payload(payload: dict[str, Any], *, truncate: bool = True) -> s
 def _execute_graph_tool_raw(name: str, tool_input: dict[str, Any]) -> str:
     """Run one tool; return full text before context-window truncation."""
     try:
+        ext_fn = _EXTENSION_HANDLERS.get(name)
+        if ext_fn is not None:
+            out = ext_fn(dict(tool_input))
+            if isinstance(out, dict):
+                return json.dumps(out, indent=2, default=str)
+            return str(out)
+
         if name == "summarize_graph":
             out = qg.summarize_graph()
             return json.dumps(out, indent=2, default=str)
@@ -515,6 +537,8 @@ class ToolAgentResult:
     graph_focus_node_id: str | None = None
     synthesis_rationale: str = ""
     judge_rounds: list[JudgeRoundInfo] = field(default_factory=list)
+    preflight: dict[str, Any] | None = None
+    extension_authoring: dict[str, Any] | None = None
 
 
 def run_planner_phase(
@@ -524,6 +548,8 @@ def run_planner_phase(
     *,
     planner_phase: int,
     max_rounds: int = 14,
+    progress_cb: callable | None = None,
+    max_total_tool_steps: int | None = None,
 ) -> tuple[Any, int]:
     """
     Run the tool-use loop until the model stops requesting tools or ``max_rounds`` is hit.
@@ -538,6 +564,14 @@ def run_planner_phase(
 
     Returns ``(contents, api_calls_made)``.
     """
+    def _emit(event_type: str, **data: Any) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb({"type": event_type, "planner_phase": planner_phase, **data})
+        except Exception:
+            return
+
     def _append_step(name: str, inp: dict[str, Any], body_full: str, phase: int) -> None:
         out_steps.append(
             ToolAgentStep(
@@ -548,6 +582,25 @@ def run_planner_phase(
             )
         )
 
+    def _execute_tool_with_events(name: str, tool_input: dict[str, Any], *, for_model: bool = True) -> str:
+        _emit("tool_start", tool=name)
+        out = execute_graph_tool(name, tool_input, for_model=for_model)
+        _emit("tool_done", tool=name)
+        return out
+
+    def _tool_cap_message(tool_name: str) -> str:
+        return (
+            "STOPPED_TOOLING: This investigation is capped at "
+            f"{max_total_tool_steps} recorded tool step(s). "
+            f"The model requested `{tool_name}` after the cap; it was not executed. "
+            "Proceed using only prior tool outputs (or stop requesting tools)."
+        )
+
+    def _execute_tool_capped(name: str, tool_input: dict[str, Any], *, for_model: bool = True) -> str:
+        if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+            return _truncate(_tool_cap_message(name)) if for_model else _tool_cap_message(name)
+        return _execute_tool_with_events(name, tool_input, for_model=for_model)
+
     if investigation_llm_backend() == "ollama":
         from src.llm.local_ollama import run_planner_phase_ollama
 
@@ -557,11 +610,12 @@ def run_planner_phase(
             out_steps,
             model=OLLAMA_MODEL,
             graph_tool_specs=GRAPH_TOOLS,
-            execute_tool=execute_graph_tool,
+            execute_tool=_execute_tool_capped,
             truncate_for_model=_truncate,
             append_tool_step=_append_step,
             planner_phase=planner_phase,
             max_rounds=max_rounds,
+            max_total_tool_steps=max_total_tool_steps,
         )
 
     if investigation_llm_backend() == "anthropic":
@@ -574,11 +628,12 @@ def run_planner_phase(
             model=ANTHROPIC_MODEL,
             graph_tool_specs=GRAPH_TOOLS,
             system_instruction=SYSTEM_TOOL_AGENT,
-            execute_tool=execute_graph_tool,
+            execute_tool=_execute_tool_capped,
             truncate_for_model=_truncate,
             append_tool_step=_append_step,
             planner_phase=planner_phase,
             max_rounds=max_rounds,
+            max_total_tool_steps=max_total_tool_steps,
         )
 
     from src.llm.gemini_llm import run_planner_phase_genai
@@ -590,11 +645,12 @@ def run_planner_phase(
         model=MODEL,
         graph_tool_specs=GRAPH_TOOLS,
         system_instruction=SYSTEM_TOOL_AGENT,
-        execute_tool=execute_graph_tool,
+        execute_tool=_execute_tool_capped,
         truncate_for_model=_truncate,
         append_tool_step=_append_step,
         planner_phase=planner_phase,
         max_rounds=max_rounds,
+        max_total_tool_steps=max_total_tool_steps,
     )
 
 
@@ -602,6 +658,7 @@ def run_tool_planner_agent(
     question: str,
     *,
     max_rounds: int | None = None,
+    progress_cb: callable | None = None,
 ) -> ToolAgentResult:
     """
     Full investigation: planner ↔ coverage judge (uncapped outer loop), then synthesis
@@ -611,4 +668,6 @@ def run_tool_planner_agent(
     """
     from src.llm.orchestration import run_investigation_orchestrator
 
-    return run_investigation_orchestrator(question, planner_max_rounds_per_phase=max_rounds)
+    return run_investigation_orchestrator(
+        question, planner_max_rounds_per_phase=max_rounds, progress_cb=progress_cb
+    )

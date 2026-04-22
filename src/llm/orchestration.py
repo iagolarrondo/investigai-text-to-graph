@@ -22,12 +22,16 @@ except ImportError:
     pass
 
 from src.graph_query.query_graph import get_graph
+from src.llm.json_extract import extract_json_object
 from src.llm.prompts import (
     SYSTEM_COVERAGE_JUDGE,
     SYSTEM_COVERAGE_JUDGE_OLLAMA,
     SYSTEM_INVESTIGATION_SYNTHESIS,
+    SYSTEM_INVESTIGATION_SYNTHESIS_ANTHROPIC,
+    SYSTEM_INVESTIGATION_SYNTHESIS_GEMINI,
     SYSTEM_INVESTIGATION_SYNTHESIS_OLLAMA,
     SYSTEM_TOOL_AGENT,
+    load_graph_llm_summary_text,
 )
 from src.llm.tool_agent import (
     ANTHROPIC_MODEL,
@@ -37,42 +41,9 @@ from src.llm.tool_agent import (
     ToolAgentResult,
     ToolAgentStep,
     investigation_llm_backend,
+    refresh_graph_tools_with_extensions,
     run_planner_phase,
 )
-
-
-def _strip_json_fence(raw: str) -> str:
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z0-9]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
-    return text.strip()
-
-
-def _extract_json_object(raw: str) -> dict[str, Any] | None:
-    text = _strip_json_fence(raw)
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return data
-        if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
-            return data[0]
-        return None
-    except json.JSONDecodeError:
-        pass
-    i = text.find("{")
-    j = text.rfind("}")
-    if i >= 0 and j > i:
-        try:
-            data = json.loads(text[i : j + 1])
-            if isinstance(data, dict):
-                return data
-            if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
-                return data[0]
-            return None
-        except json.JSONDecodeError:
-            return None
-    return None
 
 
 _NODE_ID_RE = re.compile(r"\b(Person|Claim|Policy|Bank|Address|Business)\|[A-Za-z0-9_.-]+\b")
@@ -106,6 +77,14 @@ def _truncate_for_local_llm(blob: str, max_chars: int) -> str:
         + "\n\n[... middle of tool trace omitted for local model context ...]\n\n"
         + blob[-tail:]
     )
+
+
+def _hosted_synthesis_system_with_graph_summary(base_system: str) -> str:
+    """Append ``graph_llm_summary.md`` so hosted synthesis stays current without process restarts."""
+    if "<graph_llm_summary>" in base_system:
+        return base_system
+    summary = load_graph_llm_summary_text()
+    return base_system + "\n\n<graph_llm_summary>\n" + summary + "\n</graph_llm_summary>"
 
 
 def _serialize_trace_for_judge(question: str, steps: list[ToolAgentStep]) -> str:
@@ -156,6 +135,20 @@ def _max_planner_phases() -> int | None:
     return n if n > 0 else None
 
 
+def _max_total_tool_steps() -> int | None:
+    """Hard cap on recorded tool steps per investigation (across planner phases). ``None`` = unlimited."""
+    raw = (os.environ.get("INVESTIGATION_MAX_TOOL_STEPS") or "").strip()
+    if not raw:
+        return 20
+    try:
+        n = int(raw)
+    except ValueError:
+        return 20
+    if n <= 0:
+        return None
+    return min(n, 500)
+
+
 def _planner_max_rounds(backend: str, override: int | None) -> int:
     """Tool-call rounds per planner segment (one LLM request may include multiple tool calls)."""
     if override is not None:
@@ -196,10 +189,33 @@ def _planner_append_user(backend: str, state: list[Any], text: str) -> None:
     state.append(types.Content(role="user", parts=[types.Part(text=text)]))
 
 
+def _inject_planner_preflight_seed(backend: str, planner_state: list[Any], seed: str) -> None:
+    """Append optional preflight hints to the first user turn (same conversation the planner sees)."""
+    s = (seed or "").strip()
+    if not s or not planner_state:
+        return
+    block = "\n\n--- Preflight planner seed ---\n" + s
+    if backend in ("ollama", "anthropic"):
+        for row in planner_state:
+            if isinstance(row, dict) and row.get("role") == "user":
+                row["content"] = str(row.get("content", "")) + block
+                return
+        return
+    try:
+        c0 = planner_state[0]
+        parts = getattr(c0, "parts", None)
+        if parts:
+            t0 = getattr(parts[0], "text", "") or ""
+            parts[0].text = t0 + block
+    except Exception:
+        return
+
+
 def run_investigation_orchestrator(
     question: str,
     *,
     planner_max_rounds_per_phase: int | None = None,
+    progress_cb: callable | None = None,
 ) -> ToolAgentResult:
     """
     Outer loop: planner phase → judge → if not satisfied, feedback and repeat; then synthesis.
@@ -210,6 +226,15 @@ def run_investigation_orchestrator(
     and for Ollama ``OLLAMA_TIMEOUT`` (seconds; ``0`` = no limit).
     """
     out = ToolAgentResult(question=question.strip())
+
+    def _emit(event_type: str, message: str, **data: Any) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb({"type": event_type, "message": message, **data})
+        except Exception:
+            return
+
     backend = investigation_llm_backend()
     effective_max_rounds = _planner_max_rounds(backend, planner_max_rounds_per_phase)
     # When INVESTIGATION_MAX_PLANNER_PHASES forces synthesis, prepend context so the model
@@ -290,10 +315,16 @@ def run_investigation_orchestrator(
             pre = synth_user_prefix_holder[0].strip()
             if pre:
                 intro = pre + "\n\n" + intro
+            full_domain = (os.environ.get("INVESTIGATION_ANTHROPIC_SYNTHESIS_FULL_DOMAIN_DOCS") or "").strip().lower()
+            synth_system = (
+                SYSTEM_INVESTIGATION_SYNTHESIS
+                if full_domain in ("1", "true", "yes", "on")
+                else _hosted_synthesis_system_with_graph_summary(SYSTEM_INVESTIGATION_SYNTHESIS_ANTHROPIC)
+            )
             return anthropic_generate_text(
                 client,
                 model=model_name,
-                system_instruction=SYSTEM_INVESTIGATION_SYNTHESIS,
+                system_instruction=synth_system,
                 user_text=intro + blob,
                 max_tokens=8192,
             )
@@ -329,21 +360,85 @@ def run_investigation_orchestrator(
             pre = synth_user_prefix_holder[0].strip()
             if pre:
                 intro = pre + "\n\n" + intro
+            full_domain = (os.environ.get("INVESTIGATION_GEMINI_SYNTHESIS_FULL_DOMAIN_DOCS") or "").strip().lower()
+            synth_system = (
+                SYSTEM_INVESTIGATION_SYNTHESIS
+                if full_domain in ("1", "true", "yes", "on")
+                else _hosted_synthesis_system_with_graph_summary(SYSTEM_INVESTIGATION_SYNTHESIS_GEMINI)
+            )
             return generate_text(
                 client,
                 model=model_name,
-                system_instruction=SYSTEM_INVESTIGATION_SYNTHESIS,
+                system_instruction=synth_system,
                 user_text=intro + blob,
                 max_output_tokens=8192,
             )
+
+    from src.llm.extension_author import try_author_extension
+    from src.llm.tool_preflight import run_tool_preflight, tool_catalog_json_from_graph_tools
+
+    refresh_graph_tools_with_extensions()
+    try:
+        _emit("tool_eval_start", "Tool evaluation: checking whether existing tools cover your question…")
+        out.preflight = run_tool_preflight(backend, client, model_name, out.question)
+        _emit(
+            "tool_eval_done",
+            f"Tool evaluation complete: decision={str((out.preflight or {}).get('decision', 'sufficient'))}",
+            decision=str((out.preflight or {}).get("decision", "")),
+        )
+    except Exception as exc:
+        out.preflight = {
+            "decision": "sufficient",
+            "rationale": f"Preflight raised {type(exc).__name__}; continuing without extension.",
+            "gap_summary": "",
+            "efficiency_note": "",
+            "recommended_plan": "",
+            "preflight_error": str(exc),
+        }
+
+    decision = str((out.preflight or {}).get("decision", "sufficient")).strip().lower()
+    if decision in ("insufficient", "sufficient_but_inefficient"):
+        _emit("extension_author_start", "Extension authoring: generating a new helper tool…")
+        out.extension_authoring = try_author_extension(
+            backend=backend,
+            client=client,
+            model_name=model_name,
+            question=out.question,
+            preflight=out.preflight or {},
+            tool_catalog_json=tool_catalog_json_from_graph_tools(),
+        )
+        _emit(
+            "extension_author_done",
+            "Extension authoring complete.",
+            activated=bool((out.extension_authoring or {}).get("activated")),
+            tool_name=str((out.extension_authoring or {}).get("tool_name", "")),
+        )
+        if (out.extension_authoring or {}).get("activated"):
+            refresh_graph_tools_with_extensions()
+    else:
+        out.extension_authoring = None
+
+    plan = str((out.preflight or {}).get("recommended_plan", "")).strip()
+    eff = str((out.preflight or {}).get("efficiency_note", "")).strip()
+    if plan or eff:
+        bits = []
+        if plan:
+            bits.append(f"Suggested plan: {plan}")
+        if eff:
+            bits.append(f"Efficiency note: {eff}")
+        _inject_planner_preflight_seed(backend, planner_state, "\n".join(bits))
 
     phase = 0
     planner_phases_run = 0
     no_tool_streak = 0
     bad_judge_streak = 0
     max_phases = _max_planner_phases()
+    max_tool_steps = _max_total_tool_steps()
+    force_synth_after_judge = False
 
     while True:
+        phase_label = "Tool Steps" if phase == 0 else f"Planner phase {phase}"
+        _emit("planner_phase_start", f"{phase_label}: choosing and running tools…", planner_phase=phase)
         before = len(out.steps)
         try:
             planner_state, n_calls = run_planner_phase(
@@ -352,11 +447,30 @@ def run_investigation_orchestrator(
                 out.steps,
                 planner_phase=phase,
                 max_rounds=effective_max_rounds,
+                progress_cb=progress_cb,
+                max_total_tool_steps=max_tool_steps,
             )
         except RuntimeError as exc:
             out.error = str(exc)
             return out
         out.raw_messages += n_calls
+        _emit(
+            "planner_phase_done",
+            f"{phase_label} complete (tool steps so far: {len(out.steps)})",
+            planner_phase=phase,
+            step_count=len(out.steps),
+        )
+        if max_tool_steps is not None and len(out.steps) >= max_tool_steps:
+            synth_user_prefix_holder[0] = (
+                f"STOPPED_TOOLING: Recorded **{max_tool_steps}** tool step(s) maximum "
+                "(`INVESTIGATION_MAX_TOOL_STEPS`, default **20**) — **no further tools** will run even if "
+                "the reviewer asks for more.\n"
+                "Reviewer: treat coverage as **best-effort** given the cap; if gaps remain, say so clearly in "
+                "`missing_aspects` but still allow synthesis to proceed.\n"
+                "Synthesis: summarize only tool-backed facts; state uncertainty and capped depth plainly."
+            )
+            force_synth_after_judge = True
+
         if len(out.steps) == before and n_calls >= effective_max_rounds:
             out.error = (
                 "Planner hit max API rounds for this phase without finishing. "
@@ -383,7 +497,8 @@ def run_investigation_orchestrator(
         planner_phases_run += 1
 
         try:
-            judgment = _extract_json_object(_judge_raw())
+            _emit("review_start", "Reviewer: checking tool trace coverage…")
+            judgment = extract_json_object(_judge_raw())
         except RuntimeError as exc:
             out.error = f"Coverage judge failed: {exc}"
             return out
@@ -437,6 +552,9 @@ def run_investigation_orchestrator(
 
         bad_judge_streak = 0
         satisfied = bool(judgment.get("satisfied"))
+        if force_synth_after_judge:
+            satisfied = True
+        _emit("review_done", f"Reviewer complete: satisfied={satisfied}", satisfied=satisfied)
         rationale = str(judgment.get("rationale", "")).strip() or "(no rationale)"
         missing = judgment.get("missing_aspects")
         if not isinstance(missing, list):
@@ -453,11 +571,18 @@ def run_investigation_orchestrator(
                 else "Gather additional tool evidence for the full question."
             )
 
+        if force_synth_after_judge and max_tool_steps is not None:
+            rationale = (
+                rationale
+                + f" [Tool-step cap reached: **{max_tool_steps}** recorded tool step(s) maximum "
+                "(`INVESTIGATION_MAX_TOOL_STEPS`, default **20**) — no further planner tool calls are allowed.]"
+            )
+
         out.judge_rounds.append(
             JudgeRoundInfo(
                 satisfied=satisfied,
                 rationale=rationale + (f" Missing: {missing!r}" if missing else ""),
-                feedback_for_planner=feedback if not satisfied else None,
+                feedback_for_planner=None if force_synth_after_judge else (feedback if not satisfied else None),
             )
         )
 
@@ -501,7 +626,8 @@ def run_investigation_orchestrator(
     had_phase_cap_note = bool(synth_user_prefix_holder[0].strip())
 
     try:
-        synth = _extract_json_object(_synth_raw())
+        _emit("synthesis_start", "Synthesis: writing the final answer…")
+        synth = extract_json_object(_synth_raw())
     except RuntimeError as exc:
         out.error = f"Synthesis failed: {exc}"
         return out
@@ -575,5 +701,6 @@ def run_investigation_orchestrator(
         out.graph_focus_node_id = _normalize_focus_node_id(_first_graph_node_id_from_steps(out.steps))
 
     out.final_text = answer or "(Synthesis produced an empty answer.)"
+    _emit("synthesis_done", "Done.")
 
     return out

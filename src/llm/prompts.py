@@ -4,8 +4,10 @@ Prompts for the investigation copilot and the **LLM intent classifier**.
 - **Copilot** (``SYSTEM_COPILOT_ANSWER``): answer refinement from query results + domain docs.
 - **Classifier** (``SYSTEM_INTENT_ROUTER``): maps free text → JSON ``intent`` + ``anchor_node_id`` for **Auto** routing;
   intent labels match ``QUERY_TEMPLATE_CONTEXT`` / ``<investigation_templates>``. Manual analysis type in the UI still bypasses the classifier.
-- **Tool planner / judge / synthesis** (``SYSTEM_TOOL_AGENT``, ``SYSTEM_COVERAGE_JUDGE``, ``SYSTEM_INVESTIGATION_SYNTHESIS``):
+- **Tool planner / preflight / judge** (``SYSTEM_TOOL_AGENT``, ``SYSTEM_TOOL_PREFLIGHT``, ``SYSTEM_COVERAGE_JUDGE``):
   full **``<investigation_templates>``** + **``<domain_knowledge>``** blocks for **Gemini** and **Anthropic** hosted runs.
+- **Hosted synthesis (Gemini / Anthropic)** defaults to **``<graph_llm_summary>``** from ``data/raw/graph/graph_llm_summary.md`` (not the full Original-docs bundle).
+  Set ``INVESTIGATION_*_SYNTHESIS_FULL_DOMAIN_DOCS=1`` to restore legacy synthesis with **``<domain_knowledge>``**.
   **Ollama** uses shorter judge/synthesis variants (``*_OLLAMA``) in the orchestrator only.
 """
 
@@ -31,6 +33,23 @@ def _load_domain_docs() -> str:
 
 
 DOMAIN_DOCS = _load_domain_docs()
+
+# ── Graph LLM summary (hosted synthesis context) ───────────────────────────────
+
+GRAPH_LLM_SUMMARY_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "graph" / "graph_llm_summary.md"
+)
+
+
+def load_graph_llm_summary_text() -> str:
+    """Read ``graph_llm_summary.md`` fresh (so edits apply without restarting a long-lived process)."""
+    try:
+        if not GRAPH_LLM_SUMMARY_PATH.is_file():
+            return f"(Missing graph LLM summary file: `{GRAPH_LLM_SUMMARY_PATH}`.)"
+        text = GRAPH_LLM_SUMMARY_PATH.read_text(encoding="utf-8", errors="ignore").strip()
+        return text or "(graph_llm_summary.md is empty.)"
+    except OSError as exc:
+        return f"(Could not read graph LLM summary file: {exc})"
 
 # ── Investigation templates: lens labels for interpreting tabular graph outputs ─
 # The **tool-planner** and **copilot** use this to interpret relationship names and column intent
@@ -310,6 +329,28 @@ SYSTEM_INVESTIGATION_SYNTHESIS_OLLAMA = (
     + QUERY_TEMPLATE_CONTEXT.strip()
 )
 
+# Gemini synthesis **without** the full ``<domain_knowledge>`` block (faster; ground on tool trace + templates).
+SYSTEM_INVESTIGATION_SYNTHESIS_GEMINI = (
+    _SYSTEM_INVESTIGATION_SYNTHESIS_BEHAVIOR.strip()
+    + "\n\n"
+    + "Ground your answer in the **tool trace** in the user message. You may also use "
+    "``<investigation_templates>`` and ``<graph_llm_summary>`` (appended by the runtime right "
+    "before this call) for interpretation guidance. The summary is **not** new evidence—do not "
+    "invent facts beyond the tool trace.\n\n"
+    + QUERY_TEMPLATE_CONTEXT.strip()
+)
+
+# Anthropic synthesis **without** the full ``<domain_knowledge>`` block (same intent as Gemini compact).
+SYSTEM_INVESTIGATION_SYNTHESIS_ANTHROPIC = (
+    _SYSTEM_INVESTIGATION_SYNTHESIS_BEHAVIOR.strip()
+    + "\n\n"
+    + "Ground your answer in the **tool trace** in the user message. You may also use "
+    "``<investigation_templates>`` and ``<graph_llm_summary>`` (appended by the runtime right "
+    "before this call) for interpretation guidance. The summary is **not** new evidence—do not "
+    "invent facts beyond the tool trace.\n\n"
+    + QUERY_TEMPLATE_CONTEXT.strip()
+)
+
 # ── Tool-planner agent (Gemini function calling + graph functions) ─────────────
 
 _SYSTEM_TOOL_AGENT_BEHAVIOR = """You are the **investigation planner** for InvestigAI. You have access to **tools** that run deterministic queries on an in-memory **link graph** (people, policies, claims, banks, addresses, businesses).
@@ -335,4 +376,60 @@ SYSTEM_TOOL_AGENT = (
     + "\n\n<domain_knowledge>\n"
     + (DOMAIN_DOCS if DOMAIN_DOCS else "(No domain text files found under docs/Original docs/.)")
     + "\n</domain_knowledge>"
+)
+
+# ── Tool preflight (orchestrator): can existing tools answer fully & efficiently? ─
+
+SYSTEM_TOOL_PREFLIGHT = """You are a **tooling preflight analyst** for InvestigAI.
+
+You receive the **user question** and a **JSON catalog** of existing graph tools (each has ``name`` and ``description``). No tool outputs are provided yet.
+
+Decide:
+1. Whether the **existing** tool set can answer the question **fully** (every distinct aspect the user asked for), at least in principle once the planner picks the right tools and ids.
+2. Whether answering would be **efficient** with those tools (few focused calls, clear composite match), or **inefficient** (would require many fragile hops, awkward chains, or missing a natural composite when the intent is clear).
+
+**decision** must be exactly one of:
+- ``sufficient`` — existing tools cover the question well enough and reasonably efficiently.
+- ``insufficient`` — an important aspect cannot be answered without new graph logic (not just missing entity ids in the question).
+- ``sufficient_but_inefficient`` — technically possible with primitives/composites but would be slow, error-prone, or expensive in planner rounds compared to a small dedicated helper.
+
+Also return short free-text fields to help a **code authoring** step if the decision is not ``sufficient``: ``gap_summary`` (what is missing or awkward), ``efficiency_note`` (why inefficient, if applicable), and optional ``recommended_plan`` (1–6 sentences: suggested tool order or the shape of a new helper—**not** the final user answer).
+
+Respond with **valid JSON only** (no markdown fences):
+
+{"decision": "sufficient|insufficient|sufficient_but_inefficient", "rationale": "<one short sentence>", "gap_summary": "<string; may be empty if sufficient>", "efficiency_note": "<string; may be empty>", "recommended_plan": "<string or empty>"}
+"""
+
+SYSTEM_TOOL_PREFLIGHT_OLLAMA = (
+    "You decide if existing graph tools suffice for the user's question. "
+    "Reply with **only** one JSON object — no markdown fences.\n\n"
+    "**decision** is exactly one of: \"sufficient\", \"insufficient\", \"sufficient_but_inefficient\".\n"
+    "Keys exactly: \"decision\" (string), \"rationale\" (string), \"gap_summary\" (string), "
+    "\"efficiency_note\" (string), \"recommended_plan\" (string — may be empty).\n\n"
+    "Meaning: **insufficient** = missing capability; **sufficient_but_inefficient** = possible but "
+    "too many hops / no good composite; **sufficient** = fine with current tools.\n"
+)
+
+# ── Extension author (LLM → Python module under src/graph_query/generated/) ───────
+
+_SYSTEM_TOOL_EXTENSION_AUTHOR_CORE = """You author a **single new Python graph tool** for InvestigAI (PoC).
+
+The runtime will wrap your code in a module that already imports ``get_graph`` from ``src.graph_query.query_graph`` and ``json`` / ``typing.Any``.
+
+**Output: valid JSON only** (no markdown fences) with keys:
+- ``tool_name`` (string): ``snake_case``, 2–63 chars, start with a letter; must not collide with existing tool names in the catalog.
+- ``description`` (string): planner-facing tool description (like existing tools — what it does, when to use it).
+- ``input_schema`` (object): JSON Schema object with ``type`` ``object``, ``properties``, ``required`` (array, may be empty).
+- ``function_body`` (string): **only** the indented body lines that go inside ``def run(tool_input: dict[str, Any]) -> str:`` — use **4 spaces** per indent level for Python blocks. You may use ``get_graph()``, ``json``, standard library only inside the body via allowed imports (``re``, ``collections``, ``itertools``, ``math``, ``functools``, ``operator``, ``datetime``, ``decimal``) — **no** other ``from src...`` imports, **no** file/network/subprocess, **no** ``eval``/``exec``/``open``.
+
+The function must **return a string** (typically ``json.dumps(...)``) suitable for the planner — concise keys, short strings, counts not huge node lists unless necessary.
+
+Implement something **small and testable** that addresses ``gap_summary`` / ``recommended_plan`` from the preflight block in the user message. If the graph lacks data, return JSON explaining empty results rather than raising."""
+
+SYSTEM_TOOL_EXTENSION_AUTHOR = _SYSTEM_TOOL_EXTENSION_AUTHOR_CORE.strip()
+
+SYSTEM_TOOL_EXTENSION_AUTHOR_OLLAMA = (
+    _SYSTEM_TOOL_EXTENSION_AUTHOR_CORE.strip()
+    + "\n\n**Critical:** Reply with **only** one JSON object. Keys exactly: "
+    "\"tool_name\", \"description\", \"input_schema\", \"function_body\" (string with Python lines for inside run()).\n"
 )

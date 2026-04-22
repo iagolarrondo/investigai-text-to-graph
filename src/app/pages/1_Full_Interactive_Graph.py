@@ -1,5 +1,5 @@
 """
-Interactive Graph Explorer — InvestigAI PoC v1
+Full Interactive Graph — InvestigAI PoC v1
 
 Full-graph interactive network visualization using pyvis (shared ``graph_viz`` module).
 Supports filtering by node type, highlighting N-hop neighborhoods,
@@ -40,8 +40,8 @@ def _load() -> None:
         load_graph()
 
 
-st.set_page_config(page_title="Interactive Graph — InvestigAI", layout="wide", page_icon="🕸️")
-st.title("🕸️ Interactive Graph Explorer")
+st.set_page_config(page_title="Full Interactive Graph — InvestigAI", layout="wide", page_icon="🕸️")
+st.title("🕸️ Full Interactive Graph")
 st.markdown(
     "Explore the full investigation graph. **Hover** nodes for details, "
     "**drag** to rearrange, **scroll** to zoom. **Choose a focus node** below or in the sidebar "
@@ -217,10 +217,16 @@ else:
                 props = {}
         if props:
             st.markdown("**Properties**")
+            # Coerce values to str so Arrow can serialize mixed JSON scalars (int vs str, etc.).
             st.dataframe(
-                pd.DataFrame({"field": list(props.keys()), "value": list(props.values())}),
+                pd.DataFrame(
+                    {
+                        "field": [str(k) for k in props.keys()],
+                        "value": ["" if v is None else str(v) for v in props.values()],
+                    }
+                ),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
 
     with col2:
@@ -232,7 +238,7 @@ else:
             st.dataframe(
                 pd.DataFrame(out_edges, columns=["target_node", "edge_type"]),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.caption("None")
@@ -242,7 +248,7 @@ else:
             st.dataframe(
                 pd.DataFrame(in_edges, columns=["source_node", "edge_type"]),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.caption("None")
