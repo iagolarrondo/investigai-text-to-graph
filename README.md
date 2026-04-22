@@ -1,4 +1,4 @@
-# InvestigAI — graph investigation prototype (PoC v1)
+# InvestigAI — graph investigation prototype (PoC v1 + scalable synthetic generation)
 
 ## 1. Project overview
 
@@ -6,10 +6,11 @@ This repository is a **small prototype** for an **LTC fraud-investigation copilo
 
 **What you can do today**
 
-- Turn synthetic **seed tables** into graph files (`nodes.csv`, `edges.csv`), or load a **Neo4j-style export** with the same column names expected by the loader.
-- Open a **Streamlit app** (**`src/app/app.py`**) where an LLM runs a **tool-planner** (with graph tools), a **coverage judge** reads the **full** tool trace against your question (outer loop until satisfied), then **synthesis** produces the **Answer** and a **graph focus** node for the summary pyvis view. Use **`INVESTIGATION_LLM=gemini`** with **`GEMINI_API_KEY`** (or **`GOOGLE_API_KEY`**), **`INVESTIGATION_LLM=anthropic`** with **`ANTHROPIC_API_KEY`**, or **`INVESTIGATION_LLM=ollama`** with **[Ollama](https://ollama.com/)** and a **tool-capable** model pulled (for example `ollama pull llama3.1`).
+- **Generate** configurable synthetic datasets (small or large), build graph files from **generated** or **legacy** seed tables, or load a **Neo4j-style export** with the column names expected by the loader.
+- Open **`src/app/app.py`**, where an LLM runs a **tool-planner** (with graph tools), a **coverage judge** reads the **full** tool trace against your question (outer loop until satisfied), then **synthesis** produces the **Answer** and a **graph focus** for the summary pyvis view. Configure **`INVESTIGATION_LLM`** and API keys as in **§4** (Gemini, Anthropic, or local Ollama with a **tool-capable** model, for example `ollama pull llama3.1`).
+- Use **`src/llm/router.py`** for **optional Claude intent routing** (same ``SYSTEM_INTENT_ROUTER`` as prompts; needs **`ANTHROPIC_API_KEY`**) in other scripts or experiments—the main Streamlit path is planner → judge → synthesis.
 
-**Synthetic data:** Example seed data under `data/interim/poc_v1_seed/` is **not** real customer data. Your `data/processed/` files may come from that pipeline or from another export—see **How the app works** below.
+**Synthetic data:** All bundled datasets in this repository are synthetic and not real customer data. Your `data/processed/` files may come from the builders, the synthetic pipeline, or another export—see **How the app works** below.
 
 ---
 
@@ -80,12 +81,17 @@ User question
 
 | Path | Purpose |
 |------|--------|
-| `data/interim/poc_v1_seed/` | Input CSV extracts when using the bundled builder (policies, claims, resolved people, etc.). |
+| `data/interim/poc_v1_seed/` | Legacy bundled PoC seed extracts (still supported). |
+| `data/interim/generated_seed_small/` | Generated operational seed tables for a fast local dataset. |
+| `data/interim/generated_seed_large/` | Generated operational seed tables for a ~1000-node-class dataset. |
+| `eval/generated_small/` | Hidden evaluation metadata (scenario labels, mappings) for the small dataset. |
+| `eval/generated_large/` | Hidden evaluation metadata (scenario labels, mappings) for the large dataset. |
 | `data/processed/` | **Graph used at runtime:** `nodes.csv`, `edges.csv` (from the build script or an external export). |
-| `src/graph_build/` | Builds graph CSVs from the seed (`build_graph_files.py`). |
+| `src/synthetic/` | Configurable synthetic data generation + validation tooling. |
+| `src/graph_build/` | Builds graph CSVs from a seed directory (`build_graph_files.py`). |
 | `src/graph_query/` | Loads the graph and runs investigation-style queries; optional **`extension_registry.json`** + **`generated/*.py`** for LLM-authored tools. |
-| `src/llm/` | **Tool planner** (`tool_agent.py`), **Gemini** (`gemini_llm.py`), **Anthropic** (`anthropic_llm.py`), **Ollama** (`local_ollama.py`), **orchestrator** (`orchestration.py`), **prompts** (`prompts.py`), **result text** (`result_serialize.py`). |
-| `src/app/` | Streamlit UI: **`app.py`** (planner → judge → synthesis + summary graph); **`investigation_graph.py`** (focus + hop-ego subgraph for the main app); optional **pages** under `src/app/pages/`. |
+| `src/llm/` | **Tool planner** (`tool_agent.py`), **Gemini** / **Anthropic** / **Ollama** clients, **orchestrator** (`orchestration.py`), **prompts** (`prompts.py`), **router** (`router.py`, rule-based routing for optional flows). |
+| `src/app/` | Streamlit UI: **`app.py`** (planner → judge → synthesis + summary graph); **`investigation_graph.py`**; optional **pages** under `src/app/pages/`. |
 | `tests/` | Smoke tests on processed CSVs (supports builder and Neo4j column layouts). |
 | `docs/` | Design notes and **[demo scenario cheat sheet](docs/demo_cases.md)**. |
 | `notebooks/` | Optional exploration (not required to run the app). |
@@ -122,15 +128,19 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-**Google Gemini (required for investigations):** create a `.env` file in the project root:
+This installs runtime dependencies for the Streamlit app (including **`pyvis`** for graph pages, and **`anthropic`** if you use Anthropic-hosted models or optional router helpers).
+
+**Investigations (hosted or local LLM):** create a **`.env`** file in the project root. Copy from **`.env.example`** if present. Do not commit **`.env`**. At minimum, set keys for your chosen backend—for example:
 
 ```env
 GEMINI_API_KEY=your-key-from-google-ai-studio
 # Optional:
 # GEMINI_MODEL=gemini-2.5-flash
+# INVESTIGATION_LLM=anthropic
+# ANTHROPIC_API_KEY=...
 ```
 
-Copy from `.env.example` if present. Do not commit `.env`.
+See **§2.3** for Gemini, Anthropic, and Ollama options.
 
 **Optional — tests:** if pytest is not installed:
 
@@ -140,17 +150,47 @@ pip install pytest
 
 If `pip` or `python` fails, try `python3` and `pip3` instead.
 
+If you use a virtual environment, run all commands with that environment active (or call binaries directly, e.g. `.venv/bin/pip`, `.venv/bin/streamlit`).
+
 ---
 
-## 5. How to generate graph files (builder path)
+## 5. Generate synthetic data
+
+Two configs are provided:
+
+- `src/synthetic/configs/small.yaml` (fast iteration)
+- `src/synthetic/configs/large.yaml` (default, ~1000 target node entities across core tables)
+
+Generate a dataset:
+
+```bash
+python src/synthetic/generate_dataset.py --config src/synthetic/configs/small.yaml
+python src/synthetic/generate_dataset.py --config src/synthetic/configs/large.yaml
+```
+
+This writes:
+
+- **Operational seed** CSVs (consumed by graph build) into `data/interim/generated_seed_*`
+- **Hidden eval metadata** into `eval/generated_*`
+
+Hidden eval files are intentionally separated so scenario labels are not available in operational graph data.
+
+## 6. Build graph files
 
 From the **project root**:
 
 ```bash
+# Legacy PoC seed (default)
 python src/graph_build/build_graph_files.py
+
+# Generated small seed
+python src/graph_build/build_graph_files.py --seed-dir data/interim/generated_seed_small
+
+# Generated large seed
+python src/graph_build/build_graph_files.py --seed-dir data/interim/generated_seed_large
 ```
 
-This reads `data/interim/poc_v1_seed/*.csv` and writes:
+This writes:
 
 - `data/processed/nodes.csv`
 - `data/processed/edges.csv`
@@ -161,9 +201,43 @@ If you use a **Neo4j export** instead, place compatible `nodes.csv` / `edges.csv
 
 ---
 
-## 6. How to run the app
+## 7. Validate generated data and pipeline
 
-**Ensure `data/processed/nodes.csv` and `edges.csv` exist** (section 5 or your own export).
+Run validation checks (optionally rebuilding graph first):
+
+```bash
+python src/synthetic/validate_pipeline.py \
+  --seed-dir data/interim/generated_seed_large \
+  --eval-dir eval/generated_large \
+  --run-build
+```
+
+Checks include:
+
+- operational data internal consistency
+- no hidden-label leakage into operational seed columns
+- graph edge endpoints map to valid nodes
+- current investigation queries still surface key suspicious patterns
+- hidden eval metadata contains ambiguous scenarios
+
+## 8. One-command pipeline (recommended)
+
+Run everything in sequence (generate → build → validate):
+
+```bash
+python src/synthetic/run_pipeline.py --config src/synthetic/configs/small.yaml
+python src/synthetic/run_pipeline.py --config src/synthetic/configs/large.yaml
+```
+
+Optionally launch the app immediately after successful validation:
+
+```bash
+python src/synthetic/run_pipeline.py --config src/synthetic/configs/large.yaml --launch-app
+```
+
+## 9. How to run the app
+
+**Ensure `data/processed/nodes.csv` and `edges.csv` exist** (sections 5–6 or your own export).
 
 From the **project root**, with the venv activated:
 
@@ -182,7 +256,7 @@ Your browser should open (often at `http://localhost:8501`). If it does not, cop
 
 ---
 
-## 7. How to run tests
+## 10. How to run tests
 
 Tests check that processed graph files exist, are non-empty, and are internally consistent (endpoints, expected node/edge vocabulary). They support **both** builder and Neo4j-style CSV columns. One test asserts that **`get_graph_relationship_catalog`** row counts sum to the total edge count (guards the introspection aggregation).
 
@@ -200,7 +274,7 @@ pytest tests/ -v
 
 ---
 
-## 8. Demo scenarios and questions
+## 11. Demo scenarios and questions
 
 Full **presenter-oriented** walkthrough: **[`docs/demo_cases.md`](docs/demo_cases.md)**.
 
@@ -227,8 +301,19 @@ prints sample query output in the terminal.
 
 ---
 
+## 12. Synthetic design notes
+
+Current synthetic generation follows a layered approach while preserving existing schema and app compatibility:
+
+1. baseline world generation
+2. explicit suspicious motif injection
+3. ambiguous weak-signal injection
+4. structural bridge-like anomaly injection
+
+Scenario truth labels are stored only under `eval/` and are not fed into graph build, routing, or investigation logic.
+
 ## Where this fits in the bigger picture
 
 Longer term, the idea is to connect **documentation and enterprise data** to a **single explorable graph** and an assistant that helps investigators navigate it.
 
-This PoC keeps **query logic in code**. The app uses **Gemini** only for **multi-step tool planning**, **coverage review**, and the final **Answer** text. **Schema introspection** (`get_graph_relationship_catalog`) stays useful as the export evolves. Everything runs **locally** on CSVs for demos and stakeholder reviews.
+This PoC keeps **query logic in code**. The app uses a configured LLM (**Gemini**, **Anthropic Claude**, or **Ollama**) for **multi-step tool planning**, **coverage review**, and the final **Answer** text. **Schema introspection** (`get_graph_relationship_catalog`) stays useful as the export evolves. Everything runs **locally** on CSVs for demos and stakeholder reviews.
