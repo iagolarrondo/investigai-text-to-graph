@@ -78,6 +78,36 @@ def test_compute_summary_visible_nodes_uses_synthesis_focus() -> None:
     assert cap and "Claim|C1" in cap
 
 
+def test_gather_investigation_anchors_includes_raw_synthesis_focus() -> None:
+    tr = ToolAgentResult(
+        question="q",
+        steps=[],
+        final_text="",
+        graph_focus_node_id="address_9001",
+    )
+    anchors = gather_investigation_anchors(tr)
+    assert anchors == {"address_9001"}
+
+
+def test_compute_summary_visible_nodes_raw_graph_focus_id() -> None:
+    G = nx.DiGraph()
+    G.add_node("address_9001", node_type="Address", label="9001 Main", properties_json="{}")
+    G.add_node("person_5001", node_type="Person", label="A", properties_json="{}")
+    G.add_edge("person_5001", "address_9001", edge_type="LOCATED_IN")
+    tr = ToolAgentResult(
+        question="q",
+        steps=[],
+        final_text="",
+        graph_focus_node_id="address_9001",
+    )
+    anchors = gather_investigation_anchors(tr)
+    vis, focus, mode, edge_f, cap = compute_summary_visible_nodes(G, tr, anchors, hop_depth=1)
+    assert focus == "address_9001"
+    assert "address_9001" in vis
+    assert "person_5001" in vis
+    assert edge_f is None
+
+
 def test_gather_investigation_anchors_neighbor_tool() -> None:
     tr = ToolAgentResult(
         question="q",

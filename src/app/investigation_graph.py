@@ -1,8 +1,9 @@
 """
 Build a single **summary subgraph** for the main app after a tool-planner run.
 
-Collects anchor node ids from tool inputs and from ``Type|id`` patterns in
-previews and the answer, then builds a **single focus node** plus an **undirected
+Collects anchor node ids from tool inputs, from ``Type|id`` patterns in
+previews and the answer, from synthesis ``graph_focus_node_id`` (typed or raw
+``node_id`` as in ``nodes.csv``), then builds a **single focus node** plus an **undirected
 N-hop ego network** (all node and edge types in that ball). Hop count comes from the UI.
 """
 
@@ -72,9 +73,10 @@ def gather_investigation_anchors(tr: "ToolAgentResult") -> set[str]:
         anchors |= extract_node_ids_from_text(step.result_preview)
     anchors |= extract_node_ids_from_text(tr.final_text)
     gf = getattr(tr, "graph_focus_node_id", None)
-    if isinstance(gf, str) and gf.strip() and "|" in gf.strip():
-        anchors.add(gf.strip())
-    return {a for a in anchors if a and "|" in a}
+    if isinstance(gf, str) and (sid := gf.strip()):
+        anchors.add(sid)
+    # Do not require ``Type|…`` — graph exports use raw ids (e.g. ``person_5001``, ``address_9001``).
+    return {a for a in anchors if a}
 
 
 def gather_priority_anchor_order(tr: "ToolAgentResult") -> list[str]:
@@ -86,25 +88,24 @@ def gather_priority_anchor_order(tr: "ToolAgentResult") -> list[str]:
     seen: set[str] = set()
 
     focus = getattr(tr, "graph_focus_node_id", None)
-    if isinstance(focus, str) and focus.strip() and "|" in focus:
-        fid = focus.strip()
+    if isinstance(focus, str) and (fid := focus.strip()):
         ordered.append(fid)
         seen.add(fid)
 
     for step in tr.steps:
         for aid in _anchors_from_tool_input(step.tool, step.input):
-            if aid and "|" in aid and aid not in seen:
+            if aid and aid not in seen:
                 seen.add(aid)
                 ordered.append(aid)
 
     for step in tr.steps:
         for x in extract_node_ids_from_text(step.result_preview):
-            if x not in seen and "|" in x:
+            if x not in seen:
                 seen.add(x)
                 ordered.append(x)
 
     for x in extract_node_ids_from_text(tr.final_text):
-        if x not in seen and "|" in x:
+        if x not in seen:
             seen.add(x)
             ordered.append(x)
 

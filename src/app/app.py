@@ -77,8 +77,9 @@ def _render_investigation_graph(tr: ToolAgentResult) -> None:
         )
         if not visible:
             st.caption(
-                "No graph anchors were found (no `Person|…` / `Claim|…` style ids in tool inputs "
-                "or in the answer text). Run a question that resolves specific entities, or check the tool steps."
+                "No graph anchors matched the loaded graph (no `Person|…`-style ids in tool text, "
+                "no raw `node_id` values from tools, and synthesis **graph_focus** is missing or not a node "
+                "in `nodes.csv`). Run a question that resolves specific entities, or check the tool steps."
             )
             return
         if slice_hint:
@@ -124,14 +125,9 @@ def _render_tool_planner_result(tr: ToolAgentResult) -> None:
     else:
         st.caption("_(No tool evaluation info for this run.)_")
 
-    # 2) Tool steps
+    # 2) Tool steps (all planner phases in order; no separate "Planner phase N" headings)
     st.subheader("Tool steps")
-    current_phase: int | None = None
     for i, step in enumerate(tr.steps, start=1):
-        if current_phase != step.planner_phase:
-            current_phase = step.planner_phase
-            if current_phase != 0:
-                st.markdown(f"**Planner phase {current_phase}**")
         preview = step.result_preview
         if len(preview) > 12000:
             preview = preview[:12000] + "\n\n…(truncated for display)…"

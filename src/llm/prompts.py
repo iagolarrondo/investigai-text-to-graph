@@ -1,14 +1,14 @@
 """
 Prompts for the investigation copilot and the **LLM intent classifier**.
 
-- **Copilot** (``SYSTEM_COPILOT_ANSWER``): answer refinement from query results + domain docs.
+- **Copilot** (``SYSTEM_COPILOT_ANSWER``): answer refinement from query results + **``<graph_llm_summary>``** (see below).
 - **Classifier** (``SYSTEM_INTENT_ROUTER``): maps free text → JSON ``intent`` + ``anchor_node_id`` for **Auto** routing;
   intent labels match ``QUERY_TEMPLATE_CONTEXT`` / ``<investigation_templates>``. Manual analysis type in the UI still bypasses the classifier.
 - **Tool planner / preflight / judge** (``SYSTEM_TOOL_AGENT``, ``SYSTEM_TOOL_PREFLIGHT``, ``SYSTEM_COVERAGE_JUDGE``):
-  full **``<investigation_templates>``** + **``<domain_knowledge>``** blocks for **Gemini** and **Anthropic** hosted runs.
-- **Hosted synthesis (Gemini / Anthropic)** defaults to **``<graph_llm_summary>``** from ``data/raw/graph/graph_llm_summary.md`` (not the full Original-docs bundle).
-  Set ``INVESTIGATION_*_SYNTHESIS_FULL_DOMAIN_DOCS=1`` to restore legacy synthesis with **``<domain_knowledge>``**.
-  **Ollama** uses shorter judge/synthesis variants (``*_OLLAMA``) in the orchestrator only.
+  **``<investigation_templates>``** + **``<graph_llm_summary>``** for **Gemini** and **Anthropic** hosted runs (no Original-docs bundle in prompts).
+  When ``INVESTIGATION_MERGE_JUDGE_SYNTHESIS`` is enabled (default), the judge uses ``SYSTEM_COVERAGE_JUDGE_MERGED`` and may return ``answer`` + graph focus in one JSON, skipping a separate synthesis API call when satisfied.
+- **``<graph_llm_summary>``** comes from ``data/raw/graph/graph_llm_summary.md``. Static ``SYSTEM_*`` strings embed a **snapshot at import** (restart the app to pick up edits to the markdown file).
+- **Ollama** uses shorter judge/synthesis variants (``*_OLLAMA``) in the orchestrator only (summary block omitted for latency).
 """
 
 from __future__ import annotations
@@ -60,6 +60,15 @@ def load_graph_llm_summary_text() -> str:
     except OSError as exc:
         return f"(Could not read graph LLM summary file: {exc})"
 
+
+def graph_llm_summary_embed_block() -> str:
+    """``<graph_llm_summary>`` … ``</graph_llm_summary>`` for embedding in assembled ``SYSTEM_*`` strings."""
+    return "\n\n<graph_llm_summary>\n" + load_graph_llm_summary_text() + "\n</graph_llm_summary>"
+
+
+# Snapshot at import (same lifecycle as legacy ``DOMAIN_DOCS`` in prompts).
+_GRAPH_LLM_SUMMARY_EMBED = graph_llm_summary_embed_block()
+
 # ── Investigation templates: lens labels for interpreting tabular graph outputs ─
 # The **tool-planner** and **copilot** use this to interpret relationship names and column intent
 # (legacy flows used a single template per run; the planner may combine several tools in one investigation).
@@ -88,12 +97,12 @@ Routing metadata (template id, optional anchor node id) may appear in older copi
 </investigation_templates>
 """
 
-# ── System prompt (copilot behavior + templates + domain knowledge) ───────────
+# ── System prompt (copilot behavior + templates + graph summary) ───────────────
 
 _SYSTEM_COPILOT_BEHAVIOR = """You are an investigation copilot for a long-term care (LTC) insurance company. You help Special Investigations Unit (SIU) analysts and field investigators interpret structured outputs from a **prototype link graph** (people, policies, claims, banks, addresses, businesses) so they can prioritize potential fraud or abuse for review.
 
 How you behave:
-- Base your reply **primarily** on the **Graph query results** in the user message. Do not invent claims, node IDs, relationships, or facts that are not supported by that text. You may use the **domain knowledge** section below for terminology, table meanings, and fraud-investigation context—as long as you do not contradict the actual query results.
+- Base your reply **primarily** on the **Graph query results** in the user message. Do not invent claims, node IDs, relationships, or facts that are not supported by that text. You may use the **graph_llm_summary** section below for terminology, relationship shapes, and interpretation notes—as long as you do not contradict the actual query results.
 - Write **2–6 sentences** unless the results clearly require a short bullet list (e.g., multiple distinct flags). Use **specific IDs, names, and values** from the results when they appear.
 - Frame findings as **items to review** or **potential indicators**, not as legal conclusions, accusations, or determinations of fraud.
 - If the results are empty, incomplete, or silent on the question, say so plainly and avoid speculation.
@@ -104,20 +113,18 @@ SYSTEM_COPILOT_ANSWER = (
     _SYSTEM_COPILOT_BEHAVIOR.strip()
     + "\n\n"
     + QUERY_TEMPLATE_CONTEXT.strip()
-    + "\n\n<domain_knowledge>\n"
-    + (DOMAIN_DOCS if DOMAIN_DOCS else "(No domain text files found under docs/Original docs/.)")
-    + "\n</domain_knowledge>"
+    + _GRAPH_LLM_SUMMARY_EMBED
 )
 
 # ── Intent classifier (LLM → JSON) — used when Analysis type = Auto ────────────
 
 SYSTEM_INTENT_ROUTER = f"""You are an intent classifier for an insurance fraud investigation graph tool called InvestigAI.
 
-Below is the full domain knowledge for this system — data tables, relationships, fraud patterns, and query logic used by investigators. Read and understand it before classifying any question.
+Below is the **graph LLM summary** for this book — node types, relationships, and interpretation notes. Read it before classifying any question.
 
-<domain_knowledge>
-{DOMAIN_DOCS if DOMAIN_DOCS else "(No domain text files loaded.)"}
-</domain_knowledge>
+<graph_llm_summary>
+{load_graph_llm_summary_text()}
+</graph_llm_summary>
 
 The following document defines the full query scenario taxonomy for this system — intent types, node traversal patterns, identifier conventions, edge cases, and expected response structure. Use it to correctly interpret investigator questions, especially ambiguous or multi-hop ones.
 
@@ -272,9 +279,10 @@ Your job:
 
 Rules:
 - Base decisions **only** on the trace and the question; do not invent facts or node ids.
-- If the question has **one** clear angle and the trace addresses it with concrete rows or explicit “empty” results where relevant, you may set **satisfied** to true.
-- If the question combines multiple angles, set **satisfied** to false until the trace covers each angle **or** you are confident the loaded graph cannot help (then satisfied true and say so in **rationale** / **missing_aspects**).
-- If tools returned empty tables where the user clearly expected entities, do not mark satisfied until that is acknowledged and either resolved with further tools or explicitly accepted as “no data in extract.”
+- **Trust authoritative tool outcomes.** If a graph tool returned a clear, on-graph answer—**entity or node not found**, id not in the loaded graph, “no such person/claim/policy”, empty neighborhood **because** the anchor was resolved as missing, or any other explicit “nothing here” tied to a sensible tool call—treat that as **fully covering** that lookup. Set **satisfied** to **true** so synthesis can state the negative result. Do **not** set **satisfied** to false only because a table or list is empty when the tool text already explains that the subject does not exist or has no graph presence; another planner phase would not add truth beyond what the tools already said.
+- If the question has **one** clear angle and the trace addresses it with concrete rows **or** with such a definitive negative/empty outcome, set **satisfied** to true.
+- If the question combines multiple **independent** angles, set **satisfied** to false only until each angle has either supporting rows **or** a definitive tool outcome for that angle. If the graph truly cannot help one angle after appropriate tools ran, you may still set **satisfied** to true and briefly note that angle in **missing_aspects** / **rationale**—do not loop the planner to “find” an entity the tools already ruled absent.
+- Reserve **satisfied** false for: tool/runtime errors with no usable result, a sub-question **never** attempted, or you need **different** work (e.g. user asked about two entities but only one was queried)—not for re-trying the same missing id.
 - **feedback_for_planner** must be **null** when **satisfied** is true. When false, write concise instructions (which tools, which node ids to resolve, what to verify next).
 
 Respond with **valid JSON only** (no markdown fences):
@@ -286,17 +294,58 @@ SYSTEM_COVERAGE_JUDGE = (
     _SYSTEM_COVERAGE_BEHAVIOR.strip()
     + "\n\n"
     + QUERY_TEMPLATE_CONTEXT.strip()
-    + "\n\n<domain_knowledge>\n"
-    + (DOMAIN_DOCS if DOMAIN_DOCS else "(No domain text files found under docs/Original docs/.)")
-    + "\n</domain_knowledge>"
+    + _GRAPH_LLM_SUMMARY_EMBED
 )
 
-# Shorter judge prompt for **local Ollama** (full domain block often breaks JSON + balloons latency).
+# Shorter judge prompt for **local Ollama** (omit summary block for JSON reliability + latency).
 SYSTEM_COVERAGE_JUDGE_OLLAMA = (
     _SYSTEM_COVERAGE_BEHAVIOR.strip()
     + "\n\n**Critical:** Reply with **only** one JSON object — no markdown fences, no commentary before or after. "
     "Keys exactly: \"satisfied\" (boolean), \"missing_aspects\" (array of strings), \"rationale\" (string), "
     "\"feedback_for_planner\" (string or null).\n\n"
+    + QUERY_TEMPLATE_CONTEXT.strip()
+)
+
+# Combined **coverage judge + synthesis** (one JSON when satisfied; saves a second LLM call).
+_SYSTEM_COVERAGE_AND_SYNTHESIS_BEHAVIOR = (
+    _SYSTEM_COVERAGE_BEHAVIOR.replace(
+        "2. If not, explain what is still missing and give **actionable feedback for the planner** so it knows which tools or entities to use next. Do **not** write the end-user answer here.",
+        "2. If not satisfied, explain what is still missing and give **actionable feedback for the planner**. "
+        "When **satisfied** is true, you must also produce the **end-user investigation** in the same JSON "
+        "(``answer`` plus graph-focus fields in the schema below). "
+        "Put only the short coverage judgment in **coverage_rationale**—never the user-facing prose there.",
+    )
+    .replace(
+        "briefly note that angle in **missing_aspects** / **rationale**—do not loop the planner",
+        "briefly note that angle in **missing_aspects** / **coverage_rationale**—do not loop the planner",
+    )
+    .replace(
+        '{"satisfied": <true|false>, "missing_aspects": [<string>], "rationale": "<short sentence>", "feedback_for_planner": "<string or null>"}',
+        '{"satisfied": <true|false>, "missing_aspects": [<string>], "coverage_rationale": "<short coverage sentence only>", '
+        '"feedback_for_planner": "<string or null>", '
+        '"answer": "<when satisfied: markdown with optional intro; ### Key findings; - bullets citing node ids; ### Conclusion; 1–2 sentences; when not satisfied: empty string>", '
+        '"graph_focus_node_id": "<typed id, raw slug from trace, or null>", '
+        '"graph_focus_rationale": "<one short sentence when satisfied explaining the focus choice; null when not satisfied>"}',
+    )
+    + "\n\nWhen **satisfied** is false, set ``answer`` to the empty string ``\"\"``, ``graph_focus_node_id`` to null, "
+    "and ``graph_focus_rationale`` to null.\n"
+    "Tone for ``answer`` when satisfied: professional; frame as **items to review**, not legal conclusions.\n"
+    "Inside JSON, ``answer`` may use newlines, ``###`` headings, and ``- `` bullets."
+)
+
+SYSTEM_COVERAGE_JUDGE_MERGED = (
+    _SYSTEM_COVERAGE_AND_SYNTHESIS_BEHAVIOR.strip()
+    + "\n\n"
+    + QUERY_TEMPLATE_CONTEXT.strip()
+    + _GRAPH_LLM_SUMMARY_EMBED
+)
+
+SYSTEM_COVERAGE_JUDGE_MERGED_OLLAMA = (
+    _SYSTEM_COVERAGE_AND_SYNTHESIS_BEHAVIOR.strip()
+    + "\n\n**Critical:** Reply with **only** one JSON object — no markdown fences, no commentary before or after. "
+    "Keys exactly: \"satisfied\" (boolean), \"missing_aspects\" (array of strings), \"coverage_rationale\" (string), "
+    "\"feedback_for_planner\" (string or null), \"answer\" (string — empty when satisfied is false; otherwise full markdown), "
+    "\"graph_focus_node_id\" (string or null), \"graph_focus_rationale\" (string or null).\n\n"
     + QUERY_TEMPLATE_CONTEXT.strip()
 )
 
@@ -316,22 +365,20 @@ Your tasks:
 
 Do not replace this structure with a single wall of prose.
 
-2. Choose **one** ``graph_focus_node_id`` — the single most important node id for an interactive summary graph (the “center of gravity” for this question). Prefer ids that appear in tool inputs or key tool outputs and that exist as typed ids like ``Person|…``, ``Claim|…``, ``Policy|…``. If none is clearly best, use null.
+2. Choose **one** ``graph_focus_node_id`` — the single most important node id for an interactive summary graph (the “center of gravity” for this question). Prefer ids copied **verbatim** from tool inputs or tool outputs: either typed tokens like ``Person|…``, ``Claim|…``, ``Policy|…`` **or** the graph’s raw ``node_id`` slugs (e.g. ``person_5001``, ``address_9001``, ``claim_…``) when those appear in the trace. If none is clearly best, use null.
 
 Tone: professional; frame as **items to review**, not legal conclusions.
 
 Respond with **valid JSON only** (no markdown code fence wrapping the whole response). Inside JSON, ``answer`` may contain newlines, ``###`` headings, and ``- `` bullets:
 
-{"answer": "<markdown: optional intro; ### Key findings; bullet list; ### Conclusion; 1–2 sentences>", "graph_focus_node_id": "<e.g. Claim|C001 or Person|1004, or null>", "rationale": "<one short sentence on why this focus node>"}
+{"answer": "<markdown: optional intro; ### Key findings; bullet list; ### Conclusion; 1–2 sentences>", "graph_focus_node_id": "<e.g. Claim|C001, Person|1004, address_9001, or null>", "rationale": "<one short sentence on why this focus node>"}
 """
 
 SYSTEM_INVESTIGATION_SYNTHESIS = (
     _SYSTEM_INVESTIGATION_SYNTHESIS_BEHAVIOR.strip()
     + "\n\n"
     + QUERY_TEMPLATE_CONTEXT.strip()
-    + "\n\n<domain_knowledge>\n"
-    + (DOMAIN_DOCS if DOMAIN_DOCS else "(No domain text files found under docs/Original docs/.)")
-    + "\n</domain_knowledge>"
+    + _GRAPH_LLM_SUMMARY_EMBED
 )
 
 # Shorter synthesis prompt for **local Ollama** (same rationale as compact judge).
@@ -344,26 +391,26 @@ SYSTEM_INVESTIGATION_SYNTHESIS_OLLAMA = (
     + QUERY_TEMPLATE_CONTEXT.strip()
 )
 
-# Gemini synthesis **without** the full ``<domain_knowledge>`` block (faster; ground on tool trace + templates).
+# Gemini synthesis: tool trace + templates + embedded ``<graph_llm_summary>``.
 SYSTEM_INVESTIGATION_SYNTHESIS_GEMINI = (
     _SYSTEM_INVESTIGATION_SYNTHESIS_BEHAVIOR.strip()
     + "\n\n"
     + "Ground your answer in the **tool trace** in the user message. You may also use "
-    "``<investigation_templates>`` and ``<graph_llm_summary>`` (appended by the runtime right "
-    "before this call) for interpretation guidance. The summary is **not** new evidence—do not "
-    "invent facts beyond the tool trace.\n\n"
+    "``<investigation_templates>`` and ``<graph_llm_summary>`` below for interpretation guidance. "
+    "The summary is **not** new evidence—do not invent facts beyond the tool trace.\n\n"
     + QUERY_TEMPLATE_CONTEXT.strip()
+    + _GRAPH_LLM_SUMMARY_EMBED
 )
 
-# Anthropic synthesis **without** the full ``<domain_knowledge>`` block (same intent as Gemini compact).
+# Anthropic synthesis: same as Gemini compact (graph summary embedded at prompt import).
 SYSTEM_INVESTIGATION_SYNTHESIS_ANTHROPIC = (
     _SYSTEM_INVESTIGATION_SYNTHESIS_BEHAVIOR.strip()
     + "\n\n"
     + "Ground your answer in the **tool trace** in the user message. You may also use "
-    "``<investigation_templates>`` and ``<graph_llm_summary>`` (appended by the runtime right "
-    "before this call) for interpretation guidance. The summary is **not** new evidence—do not "
-    "invent facts beyond the tool trace.\n\n"
+    "``<investigation_templates>`` and ``<graph_llm_summary>`` below for interpretation guidance. "
+    "The summary is **not** new evidence—do not invent facts beyond the tool trace.\n\n"
     + QUERY_TEMPLATE_CONTEXT.strip()
+    + _GRAPH_LLM_SUMMARY_EMBED
 )
 
 # ── Tool-planner agent (Gemini function calling + graph functions) ─────────────
@@ -380,6 +427,7 @@ _SYSTEM_TOOL_AGENT_BEHAVIOR = """You are the **investigation planner** for Inves
 
 When to stop calling tools:
 - When further tools would not materially improve evidence for the question, or you are blocked (say so briefly in a note).
+- **Trust “not in graph” outcomes.** If tools already returned that the user’s anchor (person, claim, policy, etc.) **does not exist** or has **no** matching node id in the extract, do **not** repeat the same lookup with the same id. Further calls will not conjure that entity; stop tooling for that anchor unless the user or reviewer supplies a **different** id or a genuinely **new** angle (e.g. catalog browse after a failed name search).
 
 Tone: professional; frame findings as **items to review**, not legal conclusions.
 """
@@ -388,9 +436,7 @@ SYSTEM_TOOL_AGENT = (
     _SYSTEM_TOOL_AGENT_BEHAVIOR.strip()
     + "\n\n"
     + QUERY_TEMPLATE_CONTEXT.strip()
-    + "\n\n<domain_knowledge>\n"
-    + (DOMAIN_DOCS if DOMAIN_DOCS else "(No domain text files found under docs/Original docs/.)")
-    + "\n</domain_knowledge>"
+    + _GRAPH_LLM_SUMMARY_EMBED
 )
 
 # ── Tool preflight (orchestrator): can existing tools answer fully & efficiently? ─

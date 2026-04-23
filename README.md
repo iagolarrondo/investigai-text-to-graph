@@ -7,7 +7,7 @@ This repository is a **small prototype** for an **LTC fraud-investigation copilo
 **What you can do today**
 
 - **Generate** configurable synthetic datasets (small or large), build graph files from **generated** or **legacy** seed tables, or load a **Neo4j-style export** with the column names expected by the loader.
-- Open **`src/app/app.py`**, where an LLM runs a **tool-planner** (with graph tools), a **coverage judge** reads the **full** tool trace against your question (outer loop until satisfied), then **synthesis** produces the **Answer** and a **graph focus** for the summary pyvis view. Configure **`INVESTIGATION_LLM`** and API keys as in **§4** (Gemini, Anthropic, or local Ollama with a **tool-capable** model, for example `ollama pull llama3.1`).
+- Open **`src/app/app.py`**, where an LLM runs a **tool-planner** (with graph tools), a **coverage judge** reads the **full** tool trace (outer loop until satisfied), then **synthesis** produces the **Answer** and a **graph focus** for the summary pyvis view. By default (**`INVESTIGATION_MERGE_JUDGE_SYNTHESIS`**, see **`.env.example`**) the judge may return the answer in the same JSON when satisfied, skipping a separate synthesis call. Configure **`INVESTIGATION_LLM`** and API keys as in **§4** (Gemini, Anthropic, or local Ollama with a **tool-capable** model, for example `ollama pull llama3.1`).
 - Use **`src/llm/router.py`** for **optional Claude intent routing** (same ``SYSTEM_INTENT_ROUTER`` as prompts; needs **`ANTHROPIC_API_KEY`**) in other scripts or experiments—the main Streamlit path is planner → judge → synthesis.
 
 **Synthetic data:** All bundled datasets in this repository are synthetic and not real customer data. Your `data/processed/` files may come from the builders, the synthetic pipeline, or another export—see **How the app works** below.
@@ -28,8 +28,8 @@ The UI is **`src/app/app.py`**. Everything below happens **on your machine** usi
 
 1. You enter a **question** and click **Run investigation**.
 2. **`run_tool_planner_agent`** (`src/llm/tool_agent.py`, delegating to **`run_investigation_orchestrator`** in `src/llm/orchestration.py`) runs **Gemini**, **Anthropic Claude**, or **Ollama** (see §2.3) with a **tool catalog** mapped to `query_graph` functions. The planner may call tools in multiple rounds until it stops requesting tools.
-3. A **coverage judge** (`SYSTEM_COVERAGE_JUDGE` in `prompts.py`) reads the **full** tool inputs and outputs (not truncated for the judge) and decides whether the trace answers the whole question. If not, the planner runs again with reviewer feedback (outer loop is uncapped in code; use sensible questions to control cost).
-4. **Synthesis** (`SYSTEM_INVESTIGATION_SYNTHESIS`) produces the **only** user-visible narrative and a **`graph_focus_node_id`** for the summary graph when possible.
+3. A **coverage judge** (``SYSTEM_COVERAGE_JUDGE`` or merged ``SYSTEM_COVERAGE_JUDGE_MERGED`` in `prompts.py`) reads the **full** tool inputs and outputs (not truncated for the judge) and decides whether the trace answers the whole question. If not, the planner runs again with reviewer feedback (outer loop is uncapped in code; use sensible questions to control cost).
+4. **Synthesis** (standalone ``SYSTEM_INVESTIGATION_SYNTHESIS``, or fields from the merged judge JSON when enabled) produces the **only** user-visible narrative and a **`graph_focus_node_id`** for the summary graph when possible.
 5. **All graph math is deterministic** — traversal lives in **`src/graph_query/query_graph.py`**. The LLM **selects tools** and **writes prose**; it does not invent edges.
 6. Below the **Answer**, an **Investigation graph** (pyvis) appears **once per run**: one **focus** node (synthesis ``graph_focus_node_id`` when set, otherwise heuristics from anchors), then an **undirected N-hop ball** on the full graph (all node and edge types in range). The hop slider widens or tightens that neighbourhood without re-running the LLM. Use the **Interactive Graph** page for unconstrained exploration. There are no separate graphs per tool step.
 
@@ -43,7 +43,7 @@ The UI is **`src/app/app.py`**. Everything below happens **on your machine** usi
 
 **Gemini (default)** — Set **`GEMINI_API_KEY`** (or **`GOOGLE_API_KEY`**) in **`.env`** (see §4). Optional: **`GEMINI_MODEL`** (defaults to `gemini-2.5-flash`). Prompts live in **`src/llm/prompts.py`**.
 
-**Anthropic Claude** — Set **`ANTHROPIC_API_KEY`** in **`.env`** and **`INVESTIGATION_LLM=anthropic`** (or **`claude`**). Optional: **`ANTHROPIC_MODEL`** (defaults to **`claude-sonnet-4-6`**; use any id from [Anthropic’s model list](https://docs.anthropic.com/en/docs/about-claude/models/all-models) — older snapshot names such as `claude-3-5-sonnet-20241022` may **404**). The planner, judge, and synthesis steps all use the **full** prompts in `prompts.py`, including **`<domain_knowledge>`** (same as Gemini — not the Ollama compact variants).
+**Anthropic Claude** — Set **`ANTHROPIC_API_KEY`** in **`.env`** and **`INVESTIGATION_LLM=anthropic`** (or **`claude`**). Optional: **`ANTHROPIC_MODEL`** (defaults to **`claude-sonnet-4-6`**; use any id from [Anthropic’s model list](https://docs.anthropic.com/en/docs/about-claude/models/all-models) — older snapshot names such as `claude-3-5-sonnet-20241022` may **404**). The planner, judge, and synthesis steps use the **full** prompts in `prompts.py`, including **`<graph_llm_summary>`** from `data/raw/graph/graph_llm_summary.md` (same pattern as Gemini — not the Ollama compact variants).
 
 **Local Ollama** — Install [Ollama](https://ollama.com/), run `ollama serve` (or use the desktop app), pull a model that supports **tool calling** (for example `ollama pull llama3.1`). In **`.env`**, set **`INVESTIGATION_LLM=ollama`** (or **`local`**). Optional: **`OLLAMA_HOST`** (default `http://127.0.0.1:11434`), **`OLLAMA_MODEL`** (default `llama3.1`), **`OLLAMA_TIMEOUT`** (HTTP timeout in seconds for each Ollama request; default **600**, use **`0`** for no timeout). Quality and JSON reliability vary by model; if tools misfire, try another tool-capable tag from the Ollama library.
 
@@ -53,7 +53,7 @@ The UI is **`src/app/app.py`**. Everything below happens **on your machine** usi
 
 **Ollama JSON answers:** Judge and synthesis use **compact prompts** (no full domain-doc block), **truncated traces** (see **`OLLAMA_MAX_TRACE_CHARS`** in `.env.example`), and Ollama **`format=json`** for parseable output. If the model still returns an empty JSON `answer`, the app runs a **short plain-text synthesis fallback** so you still get prose.
 
-**API usage:** Hosted models (**Gemini**, **Anthropic**) bill per request/token. Each planner **tool round** and each **judge** / **synthesis** step is separate traffic. **Ollama** avoids hosted cost but uses local RAM/CPU or GPU.
+**API usage:** Hosted models (**Gemini**, **Anthropic**) bill per request/token. Each planner **tool round** is separate traffic; **judge** and **synthesis** are separate calls unless merged mode skips synthesis after a satisfied judge. **Ollama** avoids hosted cost but uses local RAM/CPU or GPU.
 
 ### 2.4 Graph schema introspection (future-proofing)
 

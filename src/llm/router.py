@@ -123,8 +123,8 @@ def route_question_llm(question: str) -> RouterDecision:
 
     messages = list(FEW_SHOT_INTENT_EXAMPLES) + [{"role": "user", "content": question}]
 
-    # System prompt is sent as a cacheable block — the domain docs (~40KB) are
-    # static, so after the first call they are served from cache at ~10% cost.
+    # System prompt is sent as a cacheable block — templates + graph summary are
+    # static for the process, so after the first call they are served from cache at ~10% cost.
     system = [
         {
             "type": "text",

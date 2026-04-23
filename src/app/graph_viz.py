@@ -67,6 +67,44 @@ def node_tooltip(node_id: str, data: dict) -> str:
     return "<br>".join(lines)
 
 
+def _pyvis_vis_options_json(*, physics: bool) -> str:
+    """
+    Full vis.js options for ``Network.set_options``.
+
+    Pyvis replaces ``self.options`` with the parsed dict from ``set_options`` (it does not merge),
+    so we must include ``physics`` here. Otherwise vis defaults to physics enabled and nodes drift.
+    """
+    interaction = {
+        "hover": True,
+        "tooltipDelay": 100,
+        "navigationButtons": True,
+        "keyboard": {"enabled": True},
+    }
+    edges = {"arrowStrikethrough": False}
+    if physics:
+        phys: dict = {
+            "enabled": True,
+            "stabilization": {
+                "enabled": True,
+                "iterations": 220,
+                "updateInterval": 20,
+                "onlyDynamicEdges": False,
+                "fit": True,
+            },
+            "barnesHut": {
+                "gravitationalConstant": -8000,
+                "centralGravity": 0.3,
+                "springLength": 150,
+                "springConstant": 0.04,
+                "damping": 0.55,
+                "avoidOverlap": 0.35,
+            },
+        }
+    else:
+        phys = {"enabled": False}
+    return json.dumps({"interaction": interaction, "edges": edges, "physics": phys}, separators=(",", ":"))
+
+
 def nodes_within_depth(G: nx.DiGraph, start: str, depth: int) -> set[str]:
     """BFS on undirected view up to ``depth`` hops."""
     U = G.to_undirected()
@@ -96,6 +134,7 @@ def build_pyvis_html(
     edge_labels: bool = True,
     height_px: int = 680,
     allowed_edge_types: frozenset[str] | None = None,
+    freeze_physics_after_stabilize: bool = True,
 ) -> str:
     """
     Build a self-contained HTML string for ``components.html``.
@@ -103,6 +142,8 @@ def build_pyvis_html(
     * **full** — ``include_types`` required; optional ``focus_node`` + ``hop_depth`` narrows the set.
     * **subgraph** — ``visible_nodes`` required (only these nodes and edges between them are drawn).
     * **allowed_edge_types** — if set (e.g. person–person relationship types), only those edges are drawn.
+    * **freeze_physics_after_stabilize** — when ``physics`` is on, disable physics after the first layout
+      stabilizes so nodes stop drifting (vis.js ``stabilizationIterationsDone``).
     """
     try:
         from pyvis.network import Network
@@ -135,17 +176,6 @@ def build_pyvis_html(
         bgcolor="#1a1a2e",
         font_color="#ffffff",
     )
-
-    if physics:
-        net.barnes_hut(
-            gravity=-8000,
-            central_gravity=0.3,
-            spring_length=150,
-            spring_strength=0.04,
-            damping=0.09,
-        )
-    else:
-        net.toggle_physics(False)
 
     active_focus = focus_node if (focus_node and focus_node in vn) else None
 
@@ -196,17 +226,7 @@ def build_pyvis_html(
             smooth={"type": "curvedCW", "roundness": 0.15},
         )
 
-    net.set_options("""
-    var options = {
-      "interaction": {
-        "hover": true,
-        "tooltipDelay": 100,
-        "navigationButtons": true,
-        "keyboard": { "enabled": true }
-      },
-      "edges": { "arrowStrikethrough": false }
-    }
-    """)
+    net.set_options("var options = " + _pyvis_vis_options_json(physics=physics))
 
     with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w") as f:
         net.save_graph(f.name)
@@ -215,6 +235,7 @@ def build_pyvis_html(
     # When the server passes a focus node (e.g. from the Node inspector), run the same
     # client-side isolate step after load so the iframe status bar matches a graph click.
     initial_focus_js = "null" if not active_focus else json.dumps(active_focus)
+    stabilize_then_stop = bool(physics and freeze_physics_after_stabilize)
 
     custom_js = f"""
 <style>
@@ -259,6 +280,7 @@ def build_pyvis_html(
 <script type="text/javascript">
   var HOP_DEPTH = {hop_depth};
   var INITIAL_FOCUS = {initial_focus_js};
+  var STABILIZE_THEN_STOP_PHYSICS = {json.dumps(stabilize_then_stop)};
   var _isolated = false;
 
   function getNeighbourhood(nodeId, depth) {{
@@ -305,6 +327,14 @@ def build_pyvis_html(
 
   (function waitForNetwork() {{
     if (typeof network === 'undefined') {{ setTimeout(waitForNetwork, 100); return; }}
+    if (STABILIZE_THEN_STOP_PHYSICS) {{
+      function stopPhysics() {{
+        try {{ network.setOptions({{ physics: false }}); }} catch (e) {{}}
+      }}
+      network.once('stabilizationIterationsDone', stopPhysics);
+      network.once('stabilized', stopPhysics);
+      setTimeout(stopPhysics, 3500);
+    }}
     network.on('click', function(params) {{
       if (params.nodes.length > 0) {{
         isolateNode(params.nodes[0]);

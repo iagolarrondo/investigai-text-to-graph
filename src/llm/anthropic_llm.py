@@ -2,7 +2,7 @@
 **Anthropic (Claude)** Messages API: tool-planner loop and text-only judge/synthesis.
 
 Uses the same full prompts as Gemini (``SYSTEM_TOOL_AGENT``, ``SYSTEM_COVERAGE_JUDGE``,
-``SYSTEM_INVESTIGATION_SYNTHESIS`` — including domain docs).
+``SYSTEM_INVESTIGATION_SYNTHESIS_*`` — with embedded ``<graph_llm_summary>`` from ``graph_llm_summary.md``).
 """
 
 from __future__ import annotations

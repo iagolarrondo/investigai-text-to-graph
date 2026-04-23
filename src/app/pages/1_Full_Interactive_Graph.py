@@ -118,9 +118,9 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Display options")
     physics_on = st.toggle(
-        "Physics simulation",
-        value=True,
-        help="Turn off for a stable layout after dragging.",
+        "Physics (initial layout)",
+        value=False,
+        help="Runs a short force layout, then freezes so nodes stop moving. Leave off for a static load.",
     )
     show_edge_labels = st.toggle(
         "Edge labels",

@@ -2,6 +2,9 @@
 Investigation **orchestrator**: planner phases (tool loop) ↔ coverage judge
 (uncapped outer loop), then **synthesis** for the user-visible answer and graph focus.
 
+When ``INVESTIGATION_MERGE_JUDGE_SYNTHESIS`` is enabled (default), the judge prompt asks for
+``answer`` + graph focus in the same JSON when satisfied, avoiding a separate synthesis call.
+
 Backends: **Gemini** (``INVESTIGATION_LLM=gemini``), **Anthropic Claude** (``INVESTIGATION_LLM=anthropic``),
 or **local Ollama** (``INVESTIGATION_LLM=ollama``).
 """
@@ -25,13 +28,13 @@ from src.graph_query.query_graph import get_graph
 from src.llm.json_extract import extract_json_object
 from src.llm.prompts import (
     SYSTEM_COVERAGE_JUDGE,
+    SYSTEM_COVERAGE_JUDGE_MERGED,
+    SYSTEM_COVERAGE_JUDGE_MERGED_OLLAMA,
     SYSTEM_COVERAGE_JUDGE_OLLAMA,
-    SYSTEM_INVESTIGATION_SYNTHESIS,
     SYSTEM_INVESTIGATION_SYNTHESIS_ANTHROPIC,
     SYSTEM_INVESTIGATION_SYNTHESIS_GEMINI,
     SYSTEM_INVESTIGATION_SYNTHESIS_OLLAMA,
     SYSTEM_TOOL_AGENT,
-    load_graph_llm_summary_text,
 )
 from src.llm.tool_agent import (
     ANTHROPIC_MODEL,
@@ -79,14 +82,6 @@ def _truncate_for_local_llm(blob: str, max_chars: int) -> str:
     )
 
 
-def _hosted_synthesis_system_with_graph_summary(base_system: str) -> str:
-    """Append ``graph_llm_summary.md`` so hosted synthesis stays current without process restarts."""
-    if "<graph_llm_summary>" in base_system:
-        return base_system
-    summary = load_graph_llm_summary_text()
-    return base_system + "\n\n<graph_llm_summary>\n" + summary + "\n</graph_llm_summary>"
-
-
 def _serialize_trace_for_judge(question: str, steps: list[ToolAgentStep]) -> str:
     parts: list[str] = [
         f"USER_QUESTION:\n{question}\n",
@@ -103,6 +98,30 @@ def _serialize_trace_for_judge(question: str, steps: list[ToolAgentStep]) -> str
 
 def _serialize_trace_for_synthesis(question: str, steps: list[ToolAgentStep]) -> str:
     return _serialize_trace_for_judge(question, steps)
+
+
+def _merge_judge_synthesis_enabled() -> bool:
+    raw = (os.environ.get("INVESTIGATION_MERGE_JUDGE_SYNTHESIS") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _coverage_rationale_from_judgment(judgment: dict[str, Any]) -> str:
+    return str(judgment.get("coverage_rationale") or judgment.get("rationale", "")).strip()
+
+
+def _synth_payload_from_merged_judgment(judgment: dict[str, Any]) -> dict[str, Any] | None:
+    """If the merged judge JSON already contains a user ``answer``, reuse it and skip synthesis."""
+    ans = str(judgment.get("answer", "")).strip()
+    if not ans:
+        return None
+    focus_rationale = str(
+        judgment.get("graph_focus_rationale") or judgment.get("synthesis_rationale") or ""
+    ).strip()
+    return {
+        "answer": ans,
+        "graph_focus_node_id": judgment.get("graph_focus_node_id"),
+        "rationale": focus_rationale,
+    }
 
 
 def _normalize_focus_node_id(raw: object) -> str | None:
@@ -226,6 +245,7 @@ def run_investigation_orchestrator(
     and for Ollama ``OLLAMA_TIMEOUT`` (seconds; ``0`` = no limit).
     """
     out = ToolAgentResult(question=question.strip())
+    merge_js = _merge_judge_synthesis_enabled()
 
     def _emit(event_type: str, message: str, **data: Any) -> None:
         if progress_cb is None:
@@ -257,15 +277,16 @@ def run_investigation_orchestrator(
             {"role": "user", "content": out.question},
         ]
         _trace_lim = _ollama_max_trace_chars()
+        _ollama_judge_sys = SYSTEM_COVERAGE_JUDGE_MERGED_OLLAMA if merge_js else SYSTEM_COVERAGE_JUDGE_OLLAMA
 
         def _judge_raw() -> str:
             blob = _serialize_trace_for_judge(out.question, out.steps)
             return ollama_generate_text(
                 client,
                 model=model_name,
-                system_instruction=SYSTEM_COVERAGE_JUDGE_OLLAMA,
+                system_instruction=_ollama_judge_sys,
                 user_text=_truncate_for_local_llm(blob, _trace_lim),
-                num_predict=4096,
+                num_predict=8192 if merge_js else 4096,
                 json_mode=True,
             )
 
@@ -299,14 +320,15 @@ def run_investigation_orchestrator(
         client = Anthropic(api_key=api_key_a)
         model_name = ANTHROPIC_MODEL
         planner_state: list[Any] = [{"role": "user", "content": out.question}]
+        _anthropic_judge_sys = SYSTEM_COVERAGE_JUDGE_MERGED if merge_js else SYSTEM_COVERAGE_JUDGE
 
         def _judge_raw() -> str:
             return anthropic_generate_text(
                 client,
                 model=model_name,
-                system_instruction=SYSTEM_COVERAGE_JUDGE,
+                system_instruction=_anthropic_judge_sys,
                 user_text=_serialize_trace_for_judge(out.question, out.steps),
-                max_tokens=4096,
+                max_tokens=8192 if merge_js else 4096,
             )
 
         def _synth_raw() -> str:
@@ -315,16 +337,10 @@ def run_investigation_orchestrator(
             pre = synth_user_prefix_holder[0].strip()
             if pre:
                 intro = pre + "\n\n" + intro
-            full_domain = (os.environ.get("INVESTIGATION_ANTHROPIC_SYNTHESIS_FULL_DOMAIN_DOCS") or "").strip().lower()
-            synth_system = (
-                SYSTEM_INVESTIGATION_SYNTHESIS
-                if full_domain in ("1", "true", "yes", "on")
-                else _hosted_synthesis_system_with_graph_summary(SYSTEM_INVESTIGATION_SYNTHESIS_ANTHROPIC)
-            )
             return anthropic_generate_text(
                 client,
                 model=model_name,
-                system_instruction=synth_system,
+                system_instruction=SYSTEM_INVESTIGATION_SYNTHESIS_ANTHROPIC,
                 user_text=intro + blob,
                 max_tokens=8192,
             )
@@ -344,14 +360,15 @@ def run_investigation_orchestrator(
         planner_state = [
             types.Content(role="user", parts=[types.Part(text=out.question)]),
         ]
+        _gemini_judge_sys = SYSTEM_COVERAGE_JUDGE_MERGED if merge_js else SYSTEM_COVERAGE_JUDGE
 
         def _judge_raw() -> str:
             return generate_text(
                 client,
                 model=model_name,
-                system_instruction=SYSTEM_COVERAGE_JUDGE,
+                system_instruction=_gemini_judge_sys,
                 user_text=_serialize_trace_for_judge(out.question, out.steps),
-                max_output_tokens=4096,
+                max_output_tokens=8192 if merge_js else 4096,
             )
 
         def _synth_raw() -> str:
@@ -360,16 +377,10 @@ def run_investigation_orchestrator(
             pre = synth_user_prefix_holder[0].strip()
             if pre:
                 intro = pre + "\n\n" + intro
-            full_domain = (os.environ.get("INVESTIGATION_GEMINI_SYNTHESIS_FULL_DOMAIN_DOCS") or "").strip().lower()
-            synth_system = (
-                SYSTEM_INVESTIGATION_SYNTHESIS
-                if full_domain in ("1", "true", "yes", "on")
-                else _hosted_synthesis_system_with_graph_summary(SYSTEM_INVESTIGATION_SYNTHESIS_GEMINI)
-            )
             return generate_text(
                 client,
                 model=model_name,
-                system_instruction=synth_system,
+                system_instruction=SYSTEM_INVESTIGATION_SYNTHESIS_GEMINI,
                 user_text=intro + blob,
                 max_output_tokens=8192,
             )
@@ -435,6 +446,7 @@ def run_investigation_orchestrator(
     max_phases = _max_planner_phases()
     max_tool_steps = _max_total_tool_steps()
     force_synth_after_judge = False
+    pending_merged_synthesis: dict[str, Any] | None = None
 
     while True:
         phase_label = "Tool Steps" if phase == 0 else f"Planner phase {phase}"
@@ -555,7 +567,7 @@ def run_investigation_orchestrator(
         if force_synth_after_judge:
             satisfied = True
         _emit("review_done", f"Reviewer complete: satisfied={satisfied}", satisfied=satisfied)
-        rationale = str(judgment.get("rationale", "")).strip() or "(no rationale)"
+        rationale = _coverage_rationale_from_judgment(judgment) or "(no rationale)"
         missing = judgment.get("missing_aspects")
         if not isinstance(missing, list):
             missing = []
@@ -585,6 +597,10 @@ def run_investigation_orchestrator(
                 feedback_for_planner=None if force_synth_after_judge else (feedback if not satisfied else None),
             )
         )
+
+        pending_merged_synthesis = None
+        if merge_js and satisfied and _synth_payload_from_merged_judgment(judgment) is not None:
+            pending_merged_synthesis = judgment
 
         if satisfied:
             break
@@ -626,8 +642,17 @@ def run_investigation_orchestrator(
     had_phase_cap_note = bool(synth_user_prefix_holder[0].strip())
 
     try:
-        _emit("synthesis_start", "Synthesis: writing the final answer…")
-        synth = extract_json_object(_synth_raw())
+        merged_synth = (
+            _synth_payload_from_merged_judgment(pending_merged_synthesis)
+            if merge_js and pending_merged_synthesis
+            else None
+        )
+        if merged_synth is not None:
+            _emit("synthesis_start", "Synthesis: using combined reviewer output…")
+            synth = merged_synth
+        else:
+            _emit("synthesis_start", "Synthesis: writing the final answer…")
+            synth = extract_json_object(_synth_raw())
     except RuntimeError as exc:
         out.error = f"Synthesis failed: {exc}"
         return out
