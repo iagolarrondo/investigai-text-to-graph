@@ -1,0 +1,810 @@
+version: "1.0.0"
+status: proposal
+goal: >
+  Extend the InvestigAI graph beyond policy administration so it can answer the
+  full 50-question investigator set in eval/investigator_question_set.md.
+  Adds a Care-operations, Clinical, Financial, and Workflow layer on top of the
+  existing Policy-admin core, plus role-specific edges that today are collapsed
+  into ACT_ON_BEHALF_OF / IS_RELATED_TO.
+
+# -----------------------------------------------------------------------------
+# Architecture layers
+# -----------------------------------------------------------------------------
+layers:
+  policy_admin_core:
+    status: existing
+    description: Today's graph. Person, Policy, Claim, Address, BankAccount, Business.
+  clinical:
+    status: new
+    description: Diagnoses, cognitive and functional assessments, ADLs.
+    unlocks_question_sections: [5]
+  care_operations:
+    status: new
+    description: ICPs, agencies, care sessions, devices, geolocation.
+    unlocks_question_sections: [3, 4, 8]
+  financial:
+    status: new
+    description: Invoices, charges, payments, bank routing.
+    unlocks_question_sections: [6, 8]
+  workflow:
+    status: new
+    description: Review cycles, trigger metrics, remediations.
+    unlocks_question_sections: [7]
+
+# -----------------------------------------------------------------------------
+# Node types
+# -----------------------------------------------------------------------------
+node_types:
+
+  # --- Existing nodes (with new property additions) -----------------------
+  Person:
+    status: existing_extended
+    layer: policy_admin_core
+    id_pattern: "person_<RES_PERSON_ID>"
+    existing_properties:
+      - RES_PERSON_ID
+      - FIRST_NAME
+      - MIDDLE_NAME
+      - LAST_NAME
+      - BIRTH_DATE
+      - SEX
+      - SSN
+      - DEATH_DATE
+      - DECEASED_IND
+    new_properties:
+      - name: PRIMARY_ROLE
+        type: enum
+        values: [Insured, Family, ICP, InformalCaregiver, Agent, POA, HIPAAAuthorized]
+        notes: Drives planner heuristics; multiple roles via edges, but a primary tag helps tool prompts.
+      - name: LICENSE_NUMBER
+        type: string
+        applies_when: PRIMARY_ROLE in [ICP, InformalCaregiver]
+      - name: SPECIALTY
+        type: string
+        applies_when: PRIMARY_ROLE == ICP
+
+  Policy:
+    status: existing_extended
+    layer: policy_admin_core
+    id_pattern: "policy_<POLICY_NUMBER>"
+    existing_properties:
+      - COMPANY_CODE
+      - POLICY_NUMBER
+      - POLICY_STATUS
+      - POLICY_SUB_STATUS
+      - PRODUCT_CODE
+      - ISSUE_DATE
+      - ISSUE_STATE
+      - PREMIUM_AMT
+      - TOTAL_PREMIUM_PAID
+    new_properties:
+      - { name: POLICY_TERMINATION_DATE, type: date }
+      - { name: POLICY_TERMINATION_REASON, type: string }
+      - { name: POLICY_SUB_STATUS_DETAIL, type: string }
+
+  Claim:
+    status: existing_extended
+    layer: policy_admin_core
+    id_pattern: "claim_<CLAIM_ID>"
+    existing_properties:
+      - CLAIM_ID
+      - CLAIM_NUMBER
+      - POLICY_NUMBER
+      - FIRST_NAME
+      - LAST_NAME
+      - BIRTH_DATE
+      - CLAIM_OPEN_DATE
+      - CLAIM_CLOSE_DATE
+      - CLAIM_STATUS_CODE
+      - CLAIM_VALID_IND
+      - CLAIM_SYSTEM
+    new_properties:
+      - { name: CLAIM_STATUS_REASON, type: string }
+      - { name: CLAIM_CLOSE_REASON, type: string }
+      - { name: NO_TOUCH_FLAG, type: bool }
+      - { name: COGNITIVE_IMPAIRMENT_FLAG, type: bool }
+
+  Address:
+    status: existing_extended
+    layer: policy_admin_core
+    id_pattern: "address_<RES_ADDRESS_ID>"
+    existing_properties:
+      - RES_ADDRESS_ID
+      - ADDRESS_LINE_1
+      - ADDRESS_LINE_2
+      - ADDRESS_LINE_3
+      - CITY
+      - STATE
+      - ZIP_CODE
+      - LATITUDE
+      - LONGITUDE
+    new_properties:
+      - { name: RESIDENCE_TYPE, type: enum, values: [Home, Business, CareSite] }
+
+  BankAccount:
+    status: existing
+    layer: policy_admin_core
+    id_pattern: "bank_<RES_BANK_ACCOUNT_ID>"
+    existing_properties:
+      - RES_BANK_ACCOUNT_ID
+      - ROUTING_NUMBER
+      - ACCOUNT_NUMBER
+
+  Business:
+    status: existing_extended
+    layer: policy_admin_core
+    id_pattern: "business_<RES_BUSINESS_ID>"
+    existing_properties:
+      - RES_BUSINESS_ID
+      - BUSINESS_NAME
+      - TAX_ID
+      - BUSINESS_TYPE
+      - DUNS_NUMBER
+    new_properties:
+      - name: BUSINESS_TYPE_EXT
+        type: enum
+        values: [HHCA, Facility, ICP_LLC, PT_CLINIC, Pharmacy, MedicalEquipment, Other]
+        notes: Refines the existing free-text BUSINESS_TYPE.
+
+  # --- New nodes: clinical layer ------------------------------------------
+  Diagnosis:
+    status: new
+    layer: clinical
+    id_pattern: "diagnosis_<DIAGNOSIS_ID>"
+    properties:
+      - { name: DIAGNOSIS_ID, type: string, key: true }
+      - { name: ICD10_CODE, type: string }
+      - { name: DESCRIPTION, type: string }
+      - { name: DIAGNOSIS_DATE, type: date }
+      - { name: DIAGNOSING_PROVIDER_PERSON_ID, type: string }
+
+  Assessment:
+    status: new
+    layer: clinical
+    id_pattern: "assessment_<ASSESSMENT_ID>"
+    properties:
+      - { name: ASSESSMENT_ID, type: string, key: true }
+      - { name: ASSESSMENT_TYPE, type: enum, values: [MMSE, Barthel, MiniCog, Other] }
+      - { name: SCORE, type: number }
+      - { name: MAX_SCORE, type: number }
+      - { name: ASSESSED_DATE, type: date }
+      - { name: COGNITIVE_IMPAIRMENT_FLAG, type: bool }
+
+  ADL:
+    status: new
+    layer: clinical
+    id_pattern: "adl_<ADL_ID>"
+    properties:
+      - { name: ADL_ID, type: string, key: true }
+      - { name: NAME, type: enum, values: [Bathing, Dressing, Toileting, Transferring, Continence, Feeding, Other] }
+      - { name: IS_PROVIDED, type: bool }
+      - { name: FREQUENCY_PER_DAY, type: number }
+
+  # --- New nodes: care-operations layer -----------------------------------
+  CareSession:
+    status: new
+    layer: care_operations
+    id_pattern: "session_<SESSION_ID>"
+    properties:
+      - { name: SESSION_ID, type: string, key: true }
+      - { name: CLAIM_ID, type: string }
+      - { name: ICP_PERSON_ID, type: string }
+      - { name: SESSION_DATE, type: date }
+      - { name: CHECK_IN_TS, type: datetime }
+      - { name: CHECK_OUT_TS, type: datetime }
+      - { name: CHECK_IN_LAT, type: number }
+      - { name: CHECK_IN_LON, type: number }
+      - { name: CHECK_OUT_LAT, type: number }
+      - { name: CHECK_OUT_LON, type: number }
+      - { name: CHECK_IN_DEVICE_ID, type: string }
+      - { name: CHECK_OUT_DEVICE_ID, type: string }
+      - { name: SUBMISSION_MODE, type: enum, values: [Live, Manual] }
+      - { name: DURATION_MINUTES, type: number }
+
+  Device:
+    status: new
+    layer: care_operations
+    id_pattern: "device_<DEVICE_ID>"
+    properties:
+      - { name: DEVICE_ID, type: string, key: true }
+      - { name: DEVICE_OS, type: string }
+      - { name: DEVICE_MODEL, type: string }
+      - { name: FIRST_SEEN_TS, type: datetime }
+      - { name: LAST_SEEN_TS, type: datetime }
+
+  # --- New nodes: policy benefits -----------------------------------------
+  Rider:
+    status: new
+    layer: policy_admin_core
+    id_pattern: "rider_<RIDER_ID>"
+    properties:
+      - { name: RIDER_ID, type: string, key: true }
+      - { name: RIDER_CODE, type: string }
+      - { name: RIDER_NAME, type: string }
+      - { name: EFFECTIVE_DATE, type: date }
+      - { name: TERMINATION_DATE, type: date }
+
+  Benefit:
+    status: new
+    layer: policy_admin_core
+    id_pattern: "benefit_<BENEFIT_ID>"
+    properties:
+      - { name: BENEFIT_ID, type: string, key: true }
+      - { name: CARE_SETTING, type: enum, values: [Home, AssistedLiving, Nursing, Adult_Day_Care, Hospice] }
+      - { name: DAILY_MAX_BENEFIT, type: number }
+      - { name: MONTHLY_MAX_BENEFIT, type: number }
+      - { name: LIFETIME_MAX, type: number }
+
+  # --- New nodes: financial layer -----------------------------------------
+  Invoice:
+    status: new
+    layer: financial
+    id_pattern: "invoice_<INVOICE_ID>"
+    properties:
+      - { name: INVOICE_ID, type: string, key: true }
+      - { name: CLAIM_ID, type: string }
+      - { name: BILLING_PERIOD_START, type: date }
+      - { name: BILLING_PERIOD_END, type: date }
+      - { name: TOTAL_AMOUNT, type: number }
+      - { name: SUBMISSION_DATE, type: date }
+      - { name: STATUS, type: enum, values: [Submitted, Approved, Paid, Disputed, Reversed] }
+
+  Charge:
+    status: new
+    layer: financial
+    id_pattern: "charge_<CHARGE_ID>"
+    properties:
+      - { name: CHARGE_ID, type: string, key: true }
+      - { name: LINE_ITEM_DATE, type: date }
+      - { name: HOURS_BILLED, type: number }
+      - { name: HOURLY_RATE, type: number }
+      - { name: LINE_AMOUNT, type: number }
+      - { name: SERVICE_CODE, type: string }
+
+  Payment:
+    status: new
+    layer: financial
+    id_pattern: "payment_<PAYMENT_ID>"
+    properties:
+      - { name: PAYMENT_ID, type: string, key: true }
+      - { name: PAYMENT_DATE, type: date }
+      - { name: AMOUNT, type: number }
+      - { name: PAYMENT_METHOD, type: enum, values: [ACH, Check, Wire, Card] }
+      - { name: STATUS, type: enum, values: [Pending, Paid, Reversed, Failed] }
+
+  # --- New nodes: workflow layer ------------------------------------------
+  ReviewCycle:
+    status: new
+    layer: workflow
+    id_pattern: "review_<CYCLE_ID>"
+    properties:
+      - { name: CYCLE_ID, type: string, key: true }
+      - { name: CLAIM_ID, type: string }
+      - { name: OPENED_DATE, type: date }
+      - { name: CLOSED_DATE, type: date }
+      - { name: STATUS, type: enum, values: [Open, Cleared, Escalated, Remediated] }
+      - { name: OUTCOME, type: string }
+
+  TriggerMetric:
+    status: new
+    layer: workflow
+    id_pattern: "metric_<METRIC_ID>"
+    properties:
+      - { name: METRIC_ID, type: string, key: true }
+      - { name: NAME, type: enum, values: [DistanceAnomaly, ManualSessionShare, DeviceReuse, AgentClaimantOverlap, CrossClaimProvider, BankSharing] }
+      - { name: VALUE, type: number }
+      - { name: THRESHOLD, type: number }
+      - { name: TRIGGERED_DATE, type: date }
+
+  Remediation:
+    status: new
+    layer: workflow
+    id_pattern: "remediation_<REMEDIATION_ID>"
+    properties:
+      - { name: REMEDIATION_ID, type: string, key: true }
+      - { name: ACTION_TYPE, type: enum, values: [Recovery, Termination, Warning, NoAction] }
+      - { name: RECOVERY_AMOUNT, type: number }
+      - { name: COMPLETION_DATE, type: date }
+
+# -----------------------------------------------------------------------------
+# Edge types
+# -----------------------------------------------------------------------------
+edge_types:
+
+  # --- Existing edges -----------------------------------------------------
+  IS_COVERED_BY:        { status: existing, from: Person,   to: Policy,   directed: true }
+  SOLD_POLICY:          { status: existing, from: Person,   to: Policy,   directed: true }
+  IS_CLAIM_AGAINST_POLICY: { status: existing, from: Claim, to: Policy, directed: true }
+  HOLD_BY:              { status: existing, from: Person,   to: BankAccount, directed: true }
+  LOCATED_IN:           { status: existing, from: [Person, Business], to: Address, directed: true }
+  IS_SPOUSE_OF:         { status: existing, from: Person,   to: Person, directed: true, symmetric_pair: true }
+
+  # --- Refined: replace ACT_ON_BEHALF_OF and split IS_RELATED_TO ---------
+  IS_POA_FOR:
+    status: new
+    from: Person
+    to: Person
+    directed: true
+    properties:
+      - { name: POA_TYPE, type: enum, values: [Durable, Medical, Financial, Limited] }
+      - { name: EFFECTIVE_DATE, type: date }
+      - { name: TERMINATION_DATE, type: date }
+    replaces: ACT_ON_BEHALF_OF (subset)
+    unlocks: [Q6, Q10, Q38, Q46]
+
+  IS_HIPAA_AUTHORIZED_FOR:
+    status: new
+    from: Person
+    to: Person
+    directed: true
+    properties:
+      - { name: AUTHORIZATION_DATE, type: date }
+      - { name: SCOPE, type: string }
+    unlocks: [Q9, Q10, Q46]
+
+  IS_FAMILY_MEMBER_OF:
+    status: new
+    from: Person
+    to: Person
+    directed: true
+    properties:
+      - { name: RELATIONSHIP, type: enum, values: [Parent, Child, Sibling, Cousin, GrandParent, GrandChild, Other] }
+      - { name: IS_HOUSEHOLD, type: bool }
+    refines: IS_RELATED_TO
+    unlocks: [Q7, Q37, Q38, Q46]
+
+  # --- New care-operations edges -----------------------------------------
+  PROVIDES_CARE_ON:
+    status: new
+    from: Person
+    to: Claim
+    directed: true
+    properties:
+      - { name: ROLE, type: enum, values: [ICP, InformalCaregiver, FamilyCaregiver] }
+      - { name: SERVICE_START_DATE, type: date }
+      - { name: SERVICE_END_DATE, type: date }
+      - { name: AGENCY_BUSINESS_ID, type: string, optional: true }
+    unlocks: [Q11, Q12, Q13, Q15, Q39, Q49]
+
+  EMPLOYED_BY:
+    status: new
+    from: Person
+    to: Business
+    directed: true
+    properties:
+      - { name: ROLE, type: string }
+      - { name: HIRE_DATE, type: date }
+      - { name: TERMINATION_DATE, type: date }
+    unlocks: [Q11, Q50]
+
+  IS_AGENCY_FOR:
+    status: new
+    from: Business
+    to: Claim
+    directed: true
+    properties:
+      - { name: AGENCY_TYPE, type: enum, values: [HHCA, Facility, AdultDayCare] }
+      - { name: CONTRACT_START, type: date }
+      - { name: CONTRACT_END, type: date }
+    unlocks: [Q11, Q50]
+
+  LOGGED_SESSION:        { status: new, from: Person, to: CareSession, directed: true, unlocks: [Q16, Q17, Q18, Q19, Q20, Q21, Q22] }
+  SESSION_FOR_CLAIM:     { status: new, from: CareSession, to: Claim, directed: true, unlocks: [Q16, Q41, Q42, Q43, Q44, Q45] }
+  USED_DEVICE:
+    status: new
+    from: CareSession
+    to: Device
+    directed: true
+    properties:
+      - { name: EVENT, type: enum, values: [CheckIn, CheckOut] }
+    unlocks: [Q19, Q20, Q21, Q43]
+
+  # --- New clinical edges -------------------------------------------------
+  HAS_DIAGNOSIS:    { status: new, from: Claim, to: Diagnosis, directed: true, unlocks: [Q25] }
+  HAS_ASSESSMENT:   { status: new, from: Person, to: Assessment, directed: true, unlocks: [Q23, Q24] }
+  RECEIVES_ADL:     { status: new, from: Claim, to: ADL, directed: true, unlocks: [Q26] }
+
+  # --- New policy-benefit edges ------------------------------------------
+  HAS_RIDER:    { status: new, from: Policy, to: Rider, directed: true, unlocks: [Q3] }
+  HAS_BENEFIT:  { status: new, from: Policy, to: Benefit, directed: true, unlocks: [Q4] }
+
+  # --- New financial edges -----------------------------------------------
+  BILLED_ON:     { status: new, from: Invoice, to: Claim, directed: true, unlocks: [Q29, Q30] }
+  INVOICED_BY:
+    status: new
+    from: Invoice
+    to: [Person, Business]
+    directed: true
+    properties:
+      - { name: PROVIDER_ROLE, type: enum, values: [ICP, Agency, Facility] }
+    unlocks: [Q28, Q29, Q32]
+  HAS_CHARGE:       { status: new, from: Invoice, to: Charge, directed: true, unlocks: [Q28, Q29] }
+  SETTLES_INVOICE:  { status: new, from: Payment, to: Invoice, directed: true, unlocks: [Q30, Q32] }
+  PAID_TO:          { status: new, from: Payment, to: [Person, Business], directed: true, unlocks: [Q31, Q32, Q47] }
+  PAID_VIA:         { status: new, from: Payment, to: BankAccount, directed: true, unlocks: [Q31, Q47] }
+
+  # --- New workflow edges ------------------------------------------------
+  HAS_REVIEW_CYCLE: { status: new, from: Claim, to: ReviewCycle, directed: true, unlocks: [Q33, Q35] }
+  TRIGGERED:        { status: new, from: TriggerMetric, to: ReviewCycle, directed: true, unlocks: [Q34] }
+  HAS_REMEDIATION:  { status: new, from: ReviewCycle, to: Remediation, directed: true, unlocks: [Q36] }
+
+# -----------------------------------------------------------------------------
+# Coverage map: question -> nodes/edges required
+# -----------------------------------------------------------------------------
+question_coverage:
+  Q1:  { topic: "Policyholder for claim", needs: [Claim, Policy, Person, IS_COVERED_BY, IS_CLAIM_AGAINST_POLICY] }
+  Q2:  { topic: "Claim status / sub-status / termination reason", needs: [Claim.CLAIM_STATUS_REASON, Claim.CLAIM_CLOSE_REASON, Policy.POLICY_TERMINATION_REASON] }
+  Q3:  { topic: "Riders on policy", needs: [Rider, HAS_RIDER] }
+  Q4:  { topic: "DMB / MMB by care setting", needs: [Benefit, HAS_BENEFIT] }
+  Q5:  { topic: "Writing agent of policy", needs: [SOLD_POLICY] }
+  Q6:  { topic: "POA on file", needs: [IS_POA_FOR] }
+  Q7:  { topic: "Spouse + their other policies/claims", needs: [IS_SPOUSE_OF, IS_COVERED_BY] }
+  Q8:  { topic: "Spouse same address", needs: [LOCATED_IN] }
+  Q9:  { topic: "HIPAA-authorized person", needs: [IS_HIPAA_AUTHORIZED_FOR] }
+  Q10: { topic: "Provider also POA/HIPAA", needs: [PROVIDES_CARE_ON, IS_POA_FOR, IS_HIPAA_AUTHORIZED_FOR] }
+  Q11: { topic: "All providers on claim", needs: [PROVIDES_CARE_ON, IS_AGENCY_FOR] }
+  Q12: { topic: "Individual ICPs on claim", needs: [PROVIDES_CARE_ON.ROLE=ICP] }
+  Q13: { topic: "Informal caregivers on claim", needs: [PROVIDES_CARE_ON.ROLE=InformalCaregiver] }
+  Q14: { topic: "Address of ICP", needs: [Person, LOCATED_IN, Address] }
+  Q15: { topic: "Provider service dates", needs: [PROVIDES_CARE_ON.SERVICE_START_DATE, PROVIDES_CARE_ON.SERVICE_END_DATE] }
+  Q16: { topic: "Distance check-in/out from policyholder address", needs: [CareSession, LOCATED_IN, "haversine tool"] }
+  Q17: { topic: "Furthest check-out from insured address", needs: [CareSession.CHECK_OUT_LAT/LON, LOCATED_IN] }
+  Q18: { topic: "Pings >5mi from policyholder address", needs: [CareSession, LOCATED_IN, "haversine tool"] }
+  Q19: { topic: "Different check-in vs check-out devices", needs: [CareSession.CHECK_IN_DEVICE_ID, CareSession.CHECK_OUT_DEVICE_ID] }
+  Q20: { topic: "ICPs sharing device IDs", needs: [USED_DEVICE, Device] }
+  Q21: { topic: "Devices used by each ICP", needs: [LOGGED_SESSION, USED_DEVICE] }
+  Q22: { topic: "Coordinates for ICP on date", needs: [CareSession] }
+  Q23: { topic: "MMSE score", needs: [Assessment.ASSESSMENT_TYPE=MMSE] }
+  Q24: { topic: "Cognitive impairment", needs: [Assessment.COGNITIVE_IMPAIRMENT_FLAG, Claim.COGNITIVE_IMPAIRMENT_FLAG] }
+  Q25: { topic: "Diagnoses on file", needs: [Diagnosis, HAS_DIAGNOSIS] }
+  Q26: { topic: "ADLs provided", needs: [ADL, RECEIVES_ADL] }
+  Q27: { topic: "No-touch designation", needs: [Claim.NO_TOUCH_FLAG] }
+  Q28: { topic: "Hourly rate per ICP", needs: [Charge.HOURLY_RATE, INVOICED_BY] }
+  Q29: { topic: "Charges by ICP and month", needs: [Charge, Invoice, INVOICED_BY] }
+  Q30: { topic: "Payments on claim by month", needs: [Payment, SETTLES_INVOICE, BILLED_ON] }
+  Q31: { topic: "Bank accounts for payments", needs: [PAID_VIA, BankAccount] }
+  Q32: { topic: "Total paid per ICP", needs: [Payment, PAID_TO, INVOICED_BY] }
+  Q33: { topic: "Ongoing review cycle", needs: [ReviewCycle.STATUS=Open, HAS_REVIEW_CYCLE] }
+  Q34: { topic: "Metrics that triggered review", needs: [TriggerMetric, TRIGGERED] }
+  Q35: { topic: "Past Cleared cycles", needs: [ReviewCycle.STATUS=Cleared] }
+  Q36: { topic: "Remediation + recovery amount", needs: [Remediation, HAS_REMEDIATION] }
+  Q37: { topic: "ICP shares address with policyholder/family", needs: [PROVIDES_CARE_ON, LOCATED_IN, IS_FAMILY_MEMBER_OF] }
+  Q38: { topic: "ICP related to claimant", needs: [PROVIDES_CARE_ON, IS_FAMILY_MEMBER_OF, IS_POA_FOR, IS_SPOUSE_OF] }
+  Q39: { topic: "Provider on multiple claims", needs: [PROVIDES_CARE_ON] }
+  Q40: { topic: "Two ICPs share address or bank", needs: [PROVIDES_CARE_ON, LOCATED_IN, HOLD_BY] }
+  Q41: { topic: "Consecutive workdays without breaks", needs: [CareSession.SESSION_DATE, LOGGED_SESSION] }
+  Q42: { topic: "Overlapping work periods", needs: [CareSession.CHECK_IN_TS, CareSession.CHECK_OUT_TS] }
+  Q43: { topic: "Same device across different ICPs", needs: [USED_DEVICE, Device] }
+  Q44: { topic: "Asymmetric check-in/check-out distance", needs: [CareSession lat/lon, LOCATED_IN] }
+  Q45: { topic: "Manual sessions correlate with high charges/distance", needs: [CareSession.SUBMISSION_MODE, Charge, INVOICED_BY] }
+  Q46: { topic: "Full network from policyholder", needs: [IS_SPOUSE_OF, IS_FAMILY_MEMBER_OF, IS_POA_FOR, IS_HIPAA_AUTHORIZED_FOR, PROVIDES_CARE_ON] }
+  Q47: { topic: "Provider paid into bank shared with policyholder/family", needs: [PAID_VIA, HOLD_BY, IS_FAMILY_MEMBER_OF] }
+  Q48: { topic: "Business at policyholder address", needs: [Business, LOCATED_IN] }
+  Q49: { topic: "Cross-claim ICP patterns", needs: [PROVIDES_CARE_ON, CareSession, Charge] }
+  Q50: { topic: "Agency-ICP shared addresses/banks", needs: [IS_AGENCY_FOR, EMPLOYED_BY, LOCATED_IN, HOLD_BY] }
+
+# -----------------------------------------------------------------------------
+# Implied tool catalog additions (new core or LLM-authored)
+# -----------------------------------------------------------------------------
+implied_tools:
+  - name: get_care_sessions_for_claim
+    inputs: [claim_node_id, date_range_start, date_range_end]
+    purpose: All sessions on a claim within a window.
+  - name: compute_session_distance_from_address
+    inputs: [session_id]
+    purpose: Haversine distance for check-in and check-out vs the policyholder address.
+  - name: find_shared_devices_across_icps
+    inputs: [claim_node_id]
+    purpose: Devices that appear on sessions from more than one ICP.
+  - name: get_clinical_profile
+    inputs: [claim_node_id]
+    purpose: Bundles diagnoses, MMSE/Barthel scores, and ADL coverage.
+  - name: get_billing_summary
+    inputs: [claim_node_id, period_start, period_end]
+    purpose: Charges + payments grouped by ICP and month.
+  - name: get_review_cycle_history
+    inputs: [claim_node_id]
+    purpose: All review cycles with triggers and remediations.
+  - name: find_provider_overlap_across_claims
+    inputs: [provider_person_id]
+    purpose: Other claims this ICP appears on, with date overlap analysis.
+  - name: find_address_collisions_for_claim
+    inputs: [claim_node_id]
+    purpose: Anchor address + ICP + business addresses; emit any matches.
+
+# -----------------------------------------------------------------------------
+# Synthetic generator changes
+# -----------------------------------------------------------------------------
+synthetic_generator:
+  new_config_sections:
+    care_operations:
+      icps_per_claim: { min: 1, max: 4 }
+      sessions_per_icp_month: { min: 8, max: 28 }
+      manual_session_rate_baseline: 0.05
+      manual_session_rate_suspicious: 0.45
+      device_reuse_rate_suspicious: 0.30
+      geo_anomaly_rate_suspicious: 0.20
+    clinical:
+      diagnoses_per_claim: { min: 1, max: 5 }
+      mmse_score_distribution: { mean: 22, sd: 6 }
+      adls_per_claim: { min: 2, max: 6 }
+    financial:
+      hourly_rate_range: { min: 25, max: 65 }
+      payment_lag_days: { mean: 14, sd: 7 }
+    workflow:
+      review_cycle_rate: 0.12
+      trigger_metric_types: [DistanceAnomaly, ManualSessionShare, DeviceReuse, AgentClaimantOverlap]
+
+  new_suspicious_motifs:
+    - icp_claimant_address_collision
+    - device_reuse_across_icps
+    - distance_anomaly_with_manual_sessions
+    - high_charge_low_session_quality
+    - agency_icp_bank_sharing
+    - provider_cross_claim_concentration
+
+# -----------------------------------------------------------------------------
+# CSV emission contract (loader compatibility)
+# -----------------------------------------------------------------------------
+csv_emission:
+  notes: >
+    The graph loader in src/graph_query/query_graph.py currently supports a
+    builder format and a Neo4j export format. Extension stays compatible with
+    the builder format: every new node type emits one row in nodes.csv with
+    node_id, node_type, label, source_table, properties_json. Every new edge
+    emits one row in edges.csv with edge_id, source_node_id, target_node_id,
+    edge_type, source_table, properties_json. Properties beyond the canonical
+    columns are JSON-stringified into properties_json so no schema migration of
+    nodes.csv / edges.csv columns is needed.
+  example_node_row:
+    node_id: session_S202604220001
+    node_type: CareSession
+    label: "Session 2026-04-22 ICP=person_5421"
+    source_table: care_sessions
+    properties_json: |
+      {"SESSION_ID":"S202604220001","CLAIM_ID":"C9000000001",
+       "ICP_PERSON_ID":"5421","SESSION_DATE":"2026-04-22",
+       "CHECK_IN_TS":"2026-04-22T08:02:14",
+       "CHECK_OUT_TS":"2026-04-22T11:48:55",
+       "CHECK_IN_LAT":42.4583,"CHECK_IN_LON":-71.0024,
+       "CHECK_OUT_LAT":42.4585,"CHECK_OUT_LON":-71.0021,
+       "CHECK_IN_DEVICE_ID":"D-AAB12","CHECK_OUT_DEVICE_ID":"D-AAB12",
+       "SUBMISSION_MODE":"Live","DURATION_MINUTES":226}
+  example_edge_row:
+    edge_id: e_session_S202604220001_session_for_claim
+    source_node_id: session_S202604220001
+    target_node_id: claim_C9000000001
+    edge_type: SESSION_FOR_CLAIM
+    source_table: care_sessions
+    properties_json: "{}"
+
+# -----------------------------------------------------------------------------
+# Migration plan
+# -----------------------------------------------------------------------------
+migration:
+  phase_1: Refine relationship edges (IS_POA_FOR, IS_HIPAA_AUTHORIZED_FOR, IS_FAMILY_MEMBER_OF) and add Rider/Benefit. Unlocks ~6 questions.
+  phase_2: Care-operations layer (Person+ICP role, CareSession, Device, agencies). Unlocks ~20 questions.
+  phase_3: Clinical layer (Diagnosis, Assessment, ADL). Unlocks ~5 questions.
+  phase_4: Financial layer (Invoice, Charge, Payment). Unlocks ~7 questions.
+  phase_5: Workflow layer (ReviewCycle, TriggerMetric, Remediation). Unlocks ~4 questions.
+
+
+# =============================================================================
+# COMPLETE GRAPH (after all phases land)
+# =============================================================================
+# The sections above describe deltas. The block below is the comprehensive
+# end-state inventory: every node type, every edge type, the full relationship
+# catalog (from_type, edge_type, to_type), and scale estimates. This is what
+# get_graph_relationship_catalog() would return after a full rollout.
+# =============================================================================
+
+complete_graph:
+
+  summary:
+    total_node_types: 19
+    total_edge_types: 27
+    total_relationship_triples: 30
+    layers_present: [policy_admin_core, clinical, care_operations, financial, workflow]
+
+  # ---------------------------------------------------------------------------
+  # All node types (existing + new) flattened into one inventory
+  # ---------------------------------------------------------------------------
+  all_node_types:
+    - { name: Person,        layer: policy_admin_core, status: existing_extended, role: "Insureds, family, agents, ICPs, POAs, HIPAA authorizees" }
+    - { name: Policy,        layer: policy_admin_core, status: existing_extended, role: "LTC policy contracts" }
+    - { name: Claim,         layer: policy_admin_core, status: existing_extended, role: "Open / closed claim instances" }
+    - { name: Address,       layer: policy_admin_core, status: existing_extended, role: "Geo-coded residential / business locations" }
+    - { name: BankAccount,   layer: policy_admin_core, status: existing,          role: "Bank accounts referenced for premium and payment" }
+    - { name: Business,      layer: policy_admin_core, status: existing_extended, role: "HHCAs, facilities, ICP LLCs, other business providers" }
+    - { name: Rider,         layer: policy_admin_core, status: new,               role: "Optional benefits attached to a policy" }
+    - { name: Benefit,       layer: policy_admin_core, status: new,               role: "DMB / MMB by care setting on a policy" }
+    - { name: Diagnosis,     layer: clinical,          status: new,               role: "ICD-10 diagnoses on a claim" }
+    - { name: Assessment,    layer: clinical,          status: new,               role: "MMSE / Barthel / cognitive scores on a person" }
+    - { name: ADL,           layer: clinical,          status: new,               role: "Activities of Daily Living provided on a claim" }
+    - { name: CareSession,   layer: care_operations,   status: new,               role: "Per-session caregiver app records (geo, device, mode)" }
+    - { name: Device,        layer: care_operations,   status: new,               role: "Mobile devices used for session check-in / check-out" }
+    - { name: Invoice,       layer: financial,         status: new,               role: "Provider invoices billed against a claim" }
+    - { name: Charge,        layer: financial,         status: new,               role: "Line items inside an invoice" }
+    - { name: Payment,       layer: financial,         status: new,               role: "Disbursements settling invoices" }
+    - { name: ReviewCycle,   layer: workflow,          status: new,               role: "Fraud-investigation workflow instances" }
+    - { name: TriggerMetric, layer: workflow,          status: new,               role: "Signals that opened a review cycle" }
+    - { name: Remediation,   layer: workflow,          status: new,               role: "Post-cycle outcomes and recoveries" }
+
+  # ---------------------------------------------------------------------------
+  # All edge types (existing + new) flattened
+  # ---------------------------------------------------------------------------
+  all_edge_types:
+    # policy-admin core
+    - { name: IS_COVERED_BY,            status: existing }
+    - { name: SOLD_POLICY,              status: existing }
+    - { name: IS_CLAIM_AGAINST_POLICY,  status: existing }
+    - { name: HOLD_BY,                  status: existing }
+    - { name: LOCATED_IN,               status: existing }
+    - { name: IS_SPOUSE_OF,             status: existing }
+    # refined relationship edges
+    - { name: IS_POA_FOR,               status: new, refines: ACT_ON_BEHALF_OF }
+    - { name: IS_HIPAA_AUTHORIZED_FOR,  status: new }
+    - { name: IS_FAMILY_MEMBER_OF,      status: new, refines: IS_RELATED_TO }
+    # care-operations
+    - { name: PROVIDES_CARE_ON,         status: new }
+    - { name: EMPLOYED_BY,              status: new }
+    - { name: IS_AGENCY_FOR,            status: new }
+    - { name: LOGGED_SESSION,           status: new }
+    - { name: SESSION_FOR_CLAIM,        status: new }
+    - { name: USED_DEVICE,              status: new }
+    # clinical
+    - { name: HAS_DIAGNOSIS,            status: new }
+    - { name: HAS_ASSESSMENT,           status: new }
+    - { name: RECEIVES_ADL,             status: new }
+    # policy-benefit
+    - { name: HAS_RIDER,                status: new }
+    - { name: HAS_BENEFIT,              status: new }
+    # financial
+    - { name: BILLED_ON,                status: new }
+    - { name: INVOICED_BY,              status: new }
+    - { name: HAS_CHARGE,               status: new }
+    - { name: SETTLES_INVOICE,          status: new }
+    - { name: PAID_TO,                  status: new }
+    - { name: PAID_VIA,                 status: new }
+    # workflow
+    - { name: HAS_REVIEW_CYCLE,         status: new }
+    - { name: TRIGGERED,                status: new }
+    - { name: HAS_REMEDIATION,          status: new }
+
+  # ---------------------------------------------------------------------------
+  # Full relationship catalog (from_type, edge_type, to_type)
+  # This is the shape that get_graph_relationship_catalog() returns at runtime
+  # ---------------------------------------------------------------------------
+  relationship_catalog:
+    - { from: Person,        edge: IS_COVERED_BY,            to: Policy }
+    - { from: Person,        edge: SOLD_POLICY,              to: Policy }
+    - { from: Claim,         edge: IS_CLAIM_AGAINST_POLICY,  to: Policy }
+    - { from: Person,        edge: HOLD_BY,                  to: BankAccount }
+    - { from: Person,        edge: LOCATED_IN,               to: Address }
+    - { from: Business,      edge: LOCATED_IN,               to: Address }
+    - { from: Person,        edge: IS_SPOUSE_OF,             to: Person }
+    - { from: Person,        edge: IS_POA_FOR,               to: Person }
+    - { from: Person,        edge: IS_HIPAA_AUTHORIZED_FOR,  to: Person }
+    - { from: Person,        edge: IS_FAMILY_MEMBER_OF,      to: Person }
+    - { from: Person,        edge: PROVIDES_CARE_ON,         to: Claim }
+    - { from: Person,        edge: EMPLOYED_BY,              to: Business }
+    - { from: Business,      edge: IS_AGENCY_FOR,            to: Claim }
+    - { from: Person,        edge: LOGGED_SESSION,           to: CareSession }
+    - { from: CareSession,   edge: SESSION_FOR_CLAIM,        to: Claim }
+    - { from: CareSession,   edge: USED_DEVICE,              to: Device }
+    - { from: Claim,         edge: HAS_DIAGNOSIS,            to: Diagnosis }
+    - { from: Person,        edge: HAS_ASSESSMENT,           to: Assessment }
+    - { from: Claim,         edge: RECEIVES_ADL,             to: ADL }
+    - { from: Policy,        edge: HAS_RIDER,                to: Rider }
+    - { from: Policy,        edge: HAS_BENEFIT,              to: Benefit }
+    - { from: Invoice,       edge: BILLED_ON,                to: Claim }
+    - { from: Invoice,       edge: INVOICED_BY,              to: Person }
+    - { from: Invoice,       edge: INVOICED_BY,              to: Business }
+    - { from: Invoice,       edge: HAS_CHARGE,               to: Charge }
+    - { from: Payment,       edge: SETTLES_INVOICE,          to: Invoice }
+    - { from: Payment,       edge: PAID_TO,                  to: Person }
+    - { from: Payment,       edge: PAID_TO,                  to: Business }
+    - { from: Payment,       edge: PAID_VIA,                 to: BankAccount }
+    - { from: Claim,         edge: HAS_REVIEW_CYCLE,         to: ReviewCycle }
+    - { from: TriggerMetric, edge: TRIGGERED,                to: ReviewCycle }
+    - { from: ReviewCycle,   edge: HAS_REMEDIATION,          to: Remediation }
+
+  # ---------------------------------------------------------------------------
+  # Scale estimates: how big the graph gets after each phase
+  # Anchored to ~220 claims (today's "large" config) over 6 months of activity.
+  # Numbers are rough but let the team plan storage and visualization budgets.
+  # ---------------------------------------------------------------------------
+  scale_estimates:
+    today:
+      claims: 220
+      total_nodes: 1016
+      total_edges: 1770
+
+    after_full_extension_large:
+      assumptions: "220 claims, ~3 ICPs/claim, 6 months of ~15 sessions/ICP/month, ~12 invoices/claim"
+      nodes_by_type:
+        Person:        720         # +360 ICPs/family
+        Policy:        240
+        Claim:         220
+        Address:       450
+        BankAccount:   180
+        Business:      120         # +HHCAs, facilities, ICP LLCs
+        Rider:         360         # ~1.5 per policy
+        Benefit:       720         # ~3 settings per policy
+        Diagnosis:     660
+        Assessment:    440
+        ADL:           880
+        CareSession:   59000       # 220 claims * 3 ICPs * 6 mo * ~15/mo
+        Device:        900
+        Invoice:       2640
+        Charge:        26400
+        Payment:       2640
+        ReviewCycle:   30
+        TriggerMetric: 75
+        Remediation:   20
+      total_nodes: ~96000
+      edges_by_type:
+        IS_COVERED_BY:           430
+        SOLD_POLICY:             50
+        IS_CLAIM_AGAINST_POLICY: 220
+        HOLD_BY:                 460
+        LOCATED_IN:              570
+        IS_SPOUSE_OF:            96
+        IS_POA_FOR:              80
+        IS_HIPAA_AUTHORIZED_FOR: 60
+        IS_FAMILY_MEMBER_OF:     400
+        PROVIDES_CARE_ON:        660
+        EMPLOYED_BY:             500
+        IS_AGENCY_FOR:           260
+        LOGGED_SESSION:          59000
+        SESSION_FOR_CLAIM:       59000
+        USED_DEVICE:             118000   # check-in + check-out per session
+        HAS_DIAGNOSIS:           660
+        HAS_ASSESSMENT:          440
+        RECEIVES_ADL:            880
+        HAS_RIDER:               360
+        HAS_BENEFIT:             720
+        BILLED_ON:               2640
+        INVOICED_BY:             2640
+        HAS_CHARGE:              26400
+        SETTLES_INVOICE:         2640
+        PAID_TO:                 2640
+        PAID_VIA:                2640
+        HAS_REVIEW_CYCLE:        30
+        TRIGGERED:               75
+        HAS_REMEDIATION:         20
+      total_edges: ~283000
+
+    after_full_extension_small:
+      assumptions: "30 claims, demo subset, 1 month of activity"
+      total_nodes: ~6000
+      total_edges: ~18000
+
+  # ---------------------------------------------------------------------------
+  # Sample multi-hop traversals enabled in the comprehensive graph
+  # ---------------------------------------------------------------------------
+  example_traversals:
+    - name: "Provider paid into family bank account (Q47)"
+      hops: 5
+      path: "Claim --PROVIDES_CARE_ON-- Person(ICP) <-PAID_TO-- Payment --PAID_VIA--> BankAccount <--HOLD_BY-- Person --IS_FAMILY_MEMBER_OF--> Person(insured)"
+      detects: "Provider receiving payment into a bank held by the claimant's family member."
+
+    - name: "Manual high-charge cluster (Q45)"
+      hops: 3
+      path: "CareSession[SUBMISSION_MODE=Manual] --SESSION_FOR_CLAIM-- Claim <-BILLED_ON-- Invoice --HAS_CHARGE--> Charge"
+      detects: "Manual sessions correlated with above-baseline hourly_rate or hours_billed."
+
+    - name: "Cross-claim ICP pattern (Q39, Q49)"
+      hops: 4
+      path: "Person(ICP) --PROVIDES_CARE_ON--> Claim_A; same Person --PROVIDES_CARE_ON--> Claim_B; both --SESSION_FOR_CLAIM--> CareSession sets"
+      detects: "Same ICP saturating multiple claims, pattern check across distance/manual/device anomalies."
+
+    - name: "ICP-claimant address collision (Q37)"
+      hops: 3
+      path: "Person(ICP) --LOCATED_IN--> Address <--LOCATED_IN-- Person(insured) --IS_COVERED_BY--> Policy <-IS_CLAIM_AGAINST_POLICY-- Claim"
+      detects: "Care provider lives at the same address as the policyholder."
+
+    - name: "Trigger to remediation chain (Q34, Q36)"
+      hops: 3
+      path: "TriggerMetric --TRIGGERED--> ReviewCycle <--HAS_REVIEW_CYCLE-- Claim; ReviewCycle --HAS_REMEDIATION--> Remediation"
+      detects: "Full audit trail from anomaly detection to recovery action."
