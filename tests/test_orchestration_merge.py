@@ -39,3 +39,11 @@ def test_coverage_rationale_prefers_explicit_key():
     j = {"coverage_rationale": "cov", "rationale": "legacy"}
     assert orch._coverage_rationale_from_judgment(j) == "cov"
     assert orch._coverage_rationale_from_judgment({"rationale": "legacy"}) == "legacy"
+
+
+def test_max_total_tool_steps_default():
+    os.environ.pop("INVESTIGATION_MAX_TOOL_STEPS", None)
+    try:
+        assert orch._max_total_tool_steps() == 30
+    finally:
+        os.environ.pop("INVESTIGATION_MAX_TOOL_STEPS", None)

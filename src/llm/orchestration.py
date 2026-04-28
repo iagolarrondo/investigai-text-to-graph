@@ -158,11 +158,11 @@ def _max_total_tool_steps() -> int | None:
     """Hard cap on recorded tool steps per investigation (across planner phases). ``None`` = unlimited."""
     raw = (os.environ.get("INVESTIGATION_MAX_TOOL_STEPS") or "").strip()
     if not raw:
-        return 20
+        return 30
     try:
         n = int(raw)
     except ValueError:
-        return 20
+        return 30
     if n <= 0:
         return None
     return min(n, 500)
@@ -475,7 +475,7 @@ def run_investigation_orchestrator(
         if max_tool_steps is not None and len(out.steps) >= max_tool_steps:
             synth_user_prefix_holder[0] = (
                 f"STOPPED_TOOLING: Recorded **{max_tool_steps}** tool step(s) maximum "
-                "(`INVESTIGATION_MAX_TOOL_STEPS`, default **20**) — **no further tools** will run even if "
+                "(`INVESTIGATION_MAX_TOOL_STEPS`, default **30**) — **no further tools** will run even if "
                 "the reviewer asks for more.\n"
                 "Reviewer: treat coverage as **best-effort** given the cap; if gaps remain, say so clearly in "
                 "`missing_aspects` but still allow synthesis to proceed.\n"
@@ -587,7 +587,7 @@ def run_investigation_orchestrator(
             rationale = (
                 rationale
                 + f" [Tool-step cap reached: **{max_tool_steps}** recorded tool step(s) maximum "
-                "(`INVESTIGATION_MAX_TOOL_STEPS`, default **20**) — no further planner tool calls are allowed.]"
+                "(`INVESTIGATION_MAX_TOOL_STEPS`, default **30**) — no further planner tool calls are allowed.]"
             )
 
         out.judge_rounds.append(

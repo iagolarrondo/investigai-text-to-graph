@@ -425,6 +425,12 @@ _SYSTEM_TOOL_AGENT_BEHAVIOR = """You are the **investigation planner** for Inves
 5. Use **search_nodes** for names or partial ids; numeric tokens like ``1004`` with “person” usually mean ``Person|1004``; policy numbers like ``POL001`` often map to ``Policy|POL001``.
 6. Do **not** write the final user-facing investigation answer here. A separate synthesis step will read this entire conversation and produce the answer. You may emit **short internal notes** (optional) to track reasoning, but investigators will only see synthesis output.
 
+Tool efficiency constraints (important):
+- Default to **3–6 total tool calls** for a single investigation question. Exceed this only when the question clearly has multiple independent angles (e.g. shared bank **and** family ties **and** business colocation), and even then keep it tight.
+- Prefer **one** composite tool that matches the question over chaining many primitives. If you have a strong composite match (claim/person/policy network; shared bank; people clusters; business patterns), use it early.
+- After you have a directly relevant non-empty result table from a composite tool, **stop calling tools** unless there is a specific missing sub-question that the trace clearly cannot answer yet.
+- Avoid “tool wandering”: do not perform long sequences of ``get_neighbors`` / hop expansions to explore the whole graph when a composite or a subgraph summary would answer the question faster.
+
 When to stop calling tools:
 - When further tools would not materially improve evidence for the question, or you are blocked (say so briefly in a note).
 - **Trust “not in graph” outcomes.** If tools already returned that the user’s anchor (person, claim, policy, etc.) **does not exist** or has **no** matching node id in the extract, do **not** repeat the same lookup with the same id. Further calls will not conjure that entity; stop tooling for that anchor unless the user or reviewer supplies a **different** id or a genuinely **new** angle (e.g. catalog browse after a failed name search).
@@ -470,6 +476,27 @@ SYSTEM_TOOL_PREFLIGHT_OLLAMA = (
     "Meaning: **insufficient** = missing capability; **sufficient_but_inefficient** = possible but "
     "too many hops / no good composite; **sufficient** = fine with current tools.\n"
 )
+
+# ── Entity mention extractor (UI pre-step): common language → graph mentions ───
+
+SYSTEM_ENTITY_MENTION_EXTRACTOR = """You help resolve an investigator's free-text question to graph node ids.
+
+You are given a single investigation question. Identify up to **5** short substrings (mentions) that likely refer
+to graph nodes and would benefit from disambiguation (names, addresses/places like \"Quincy, MA\", policy numbers,
+claim ids, bank account numbers, business names).
+
+Return a JSON array only (no markdown). Each item:
+- ``mention``: the exact substring from the question (preserve casing/spaces as seen in the question).
+- ``node_type_hint``: one of ``Person``, ``Claim``, ``Policy``, ``BankAccount``, ``Business``, ``Address``, or null.
+
+Rules:
+- Only include mentions that appear verbatim in the question.
+- Do not include generic words (\"policy\", \"claim\", \"bank account\") unless paired with a specific identifier.
+- If nothing should be resolved, return an empty array ``[]``.
+
+Example output:
+[{"mention":"Quincy, MA","node_type_hint":"Address"},{"mention":"POL-LTC-10042","node_type_hint":"Policy"}]
+"""
 
 # ── Extension author (LLM → Python module under src/graph_query/generated/) ───────
 

@@ -12,6 +12,8 @@ from typing import Any
 
 from anthropic import Anthropic
 
+import os
+
 
 def graph_tools_for_anthropic(graph_tool_specs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map internal tool specs to Anthropic ``tools`` (``input_schema`` = JSON Schema object)."""
@@ -76,6 +78,32 @@ def run_planner_phase_anthropic(
     tools = graph_tools_for_anthropic(graph_tool_specs)
     api_calls = 0
 
+    def _early_stop_on_composite_enabled() -> bool:
+        raw = (os.environ.get("INVESTIGATION_EARLY_STOP_ON_COMPOSITE") or "").strip().lower()
+        return raw in ("1", "true", "yes", "on")
+
+    _COMPOSITE_TOOLS = {
+        "get_claim_network",
+        "get_policy_network",
+        "get_person_policies",
+        "get_claim_subgraph_summary",
+        "get_person_subgraph_summary",
+        "policies_with_related_coparties",
+        "find_shared_bank_accounts",
+        "find_related_people_clusters",
+        "find_business_connection_patterns",
+    }
+
+    def _looks_nonempty_tool_output(text: str) -> bool:
+        t = (text or "").strip().lower()
+        if len(t) < 80:
+            return False
+        # Heuristic: if the tool itself says empty/none, don't early-stop.
+        for marker in ("(empty", "no results", "0 row", "0 rows", "empty)"):
+            if marker in t:
+                return False
+        return True
+
     while api_calls < max_rounds:
         if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
             break
@@ -118,6 +146,7 @@ def run_planner_phase_anthropic(
             break
 
         tool_result_blocks: list[dict[str, Any]] = []
+        saw_nonempty_composite = False
         for b in tool_uses:
             tname = str(b.get("name") or "").strip()
             if not tname:
@@ -133,6 +162,8 @@ def run_planner_phase_anthropic(
                 body_full = execute_tool(tname, tinp, for_model=False)
                 body_api = truncate_for_model(body_full)
                 append_tool_step(tname, tinp, body_full, planner_phase)
+                if tname in _COMPOSITE_TOOLS and _looks_nonempty_tool_output(body_full):
+                    saw_nonempty_composite = True
             tool_result_blocks.append(
                 {
                     "type": "tool_result",
@@ -147,6 +178,8 @@ def run_planner_phase_anthropic(
             break
         messages.append({"role": "user", "content": tool_result_blocks})
         if max_total_tool_steps is not None and len(out_steps) >= max_total_tool_steps:
+            break
+        if _early_stop_on_composite_enabled() and saw_nonempty_composite:
             break
 
     return messages, api_calls

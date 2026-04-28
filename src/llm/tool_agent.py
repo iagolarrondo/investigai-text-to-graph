@@ -148,14 +148,6 @@ def normalize_claim_node_id(raw: str) -> str:
 # Tool definitions (JSON Schema subset; used by the Gemini planner)
 _CORE_GRAPH_TOOLS: list[dict[str, Any]] = [
     {
-        "name": "summarize_graph",
-        "description": (
-            "Graph health summary: node/edge counts and frequency tables for node_type "
-            "and edge_type. Use when the user asks what is in the graph or for orientation."
-        ),
-        "input_schema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
         "name": "get_graph_relationship_catalog",
         "description": (
             "**Future-proof schema introspection:** lists every directed triple "
@@ -163,6 +155,14 @@ _CORE_GRAPH_TOOLS: list[dict[str, Any]] = [
             "Use this when the question does not map to a named composite tool—so you can see "
             "how entity types connect and plan multi-step calls (search_nodes → get_neighbors → …). "
             "Updates automatically when the graph export changes; no new code required per question."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "summarize_graph",
+        "description": (
+            "Graph health summary: node/edge counts and frequency tables for node_type "
+            "and edge_type. Use when the user asks what is in the graph or for quick orientation."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -193,20 +193,6 @@ _CORE_GRAPH_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "get_neighbors",
-        "description": (
-            "Directed neighbors of a node: outgoing (successors) and incoming (predecessors) ids. "
-            "Use to explore connectivity from a known node_id."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "node_id": {"type": "string", "description": "Exact graph node id."},
-            },
-            "required": ["node_id"],
-        },
-    },
-    {
         "name": "get_person_policies",
         "description": (
             "List all policies linked to a Person via IS_COVERED_BY or SOLD_POLICY (person-centric). "
@@ -219,25 +205,6 @@ _CORE_GRAPH_TOOLS: list[dict[str, Any]] = [
                 "person_node_id": {
                     "type": "string",
                     "description": "Person node id, e.g. Person|1001, person_5001, or 1004 (normalized to Person|1004).",
-                },
-            },
-            "required": ["person_node_id"],
-        },
-    },
-    {
-        "name": "policies_with_related_coparties",
-        "description": (
-            "Policies where the anchor person has IS_COVERED_BY/SOLD_POLICY AND another person "
-            "on the **same** policy has a direct person→person tie with them (spouse, related-to, "
-            "POA/HIPAA/diagnosing, same types as family clusters). Use for: ‘on a policy with someone "
-            "they know’, ‘policy overlap with a relative’, ‘related party on same policy’ — **not** a claim query."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "person_node_id": {
-                    "type": "string",
-                    "description": "Anchor Person id (Person|… or numeric id).",
                 },
             },
             "required": ["person_node_id"],
@@ -263,6 +230,24 @@ _CORE_GRAPH_TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["claim_node_id"],
+        },
+    },
+    {
+        "name": "get_policy_network",
+        "description": (
+            "Policy-centric slice: the policy row, every Person on it (IS_COVERED_BY / SOLD_POLICY), "
+            "and every Claim filed against it (IS_CLAIM_AGAINST_POLICY). Use when the anchor is a **policy** "
+            "or policy number, not a claim. Complements get_claim_network (claim-first) and get_person_policies (person-first)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "policy_node_id": {
+                    "type": "string",
+                    "description": "Policy node id, e.g. Policy|POL001 or POL001 (normalized).",
+                },
+            },
+            "required": ["policy_node_id"],
         },
     },
     {
@@ -311,21 +296,22 @@ _CORE_GRAPH_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "get_policy_network",
+        "name": "policies_with_related_coparties",
         "description": (
-            "Policy-centric slice: the policy row, every Person on it (IS_COVERED_BY / SOLD_POLICY), "
-            "and every Claim filed against it (IS_CLAIM_AGAINST_POLICY). Use when the anchor is a **policy** "
-            "or policy number, not a claim. Complements get_claim_network (claim-first) and get_person_policies (person-first)."
+            "Policies where the anchor person has IS_COVERED_BY/SOLD_POLICY AND another person "
+            "on the **same** policy has a direct person→person tie with them (spouse, related-to, "
+            "POA/HIPAA/diagnosing, same types as family clusters). Use for: ‘on a policy with someone "
+            "they know’, ‘policy overlap with a relative’, ‘related party on same policy’ — **not** a claim query."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "policy_node_id": {
+                "person_node_id": {
                     "type": "string",
-                    "description": "Policy node id, e.g. Policy|POL001 or POL001 (normalized).",
+                    "description": "Anchor Person id (Person|… or numeric id).",
                 },
             },
-            "required": ["policy_node_id"],
+            "required": ["person_node_id"],
         },
     },
     {
@@ -348,6 +334,20 @@ _CORE_GRAPH_TOOLS: list[dict[str, Any]] = [
             "Business and person colocation at the same address. Global query."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_neighbors",
+        "description": (
+            "Directed neighbors of a node: outgoing (successors) and incoming (predecessors) ids. "
+            "Use to explore connectivity from a known node_id when no composite tool fits."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string", "description": "Exact graph node id."},
+            },
+            "required": ["node_id"],
+        },
     },
 ]
 
