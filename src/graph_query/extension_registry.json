@@ -1,0 +1,73 @@
+[
+  {
+    "name": "claims_agent_insured_shared_bank",
+    "module": "claims_agent_insured_shared_bank",
+    "description": "For every Claim in the graph, finds the writing agent of the claim's policy and checks whether any insured on that same policy shares a bank account with that agent. Returns a list of matches with (claim_id, policy_id, agent_id, insured_id, bank_account_id). Use when the question asks about insureds sharing a bank account with the writing agent of a claim's policy.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of result rows to return (default 200, max 1000).",
+          "default": 200
+        }
+      },
+      "required": []
+    },
+    "active": true,
+    "created_at": "2026-04-22T01:39:05.088873+00:00"
+  },
+  {
+    "name": "claims_agent_insured_shared_phone",
+    "module": "claims_agent_insured_shared_phone",
+    "description": "For every Claim in the graph, finds the writing agent of the claim's policy and checks whether any insured on that same policy shares a phone number with that agent. Returns a list of matches with (claim_id, policy_id, agent_id, insured_id, shared_phone). Use when the question asks about insureds sharing a phone number with the writing agent of a claim's policy.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "active": true,
+    "created_at": "2026-04-22T01:43:41.485182+00:00"
+  },
+  {
+    "name": "policies_with_multiple_covered_persons",
+    "module": "policies_with_multiple_covered_persons",
+    "description": "Returns all policies that have more than one person covered (via IS_COVERED_BY or SOLD_POLICY edges). For each qualifying policy, lists the count of covered persons and their node IDs. Use when the question asks which policies cover more than one person, multi-person policies, or group policies.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "min_persons": {
+          "type": "integer",
+          "description": "Minimum number of covered persons required (default: 2).",
+          "default": 2
+        }
+      },
+      "required": []
+    },
+    "active": true,
+    "created_at": "2026-04-23T12:50:14.716505+00:00"
+  },
+  {
+    "name": "find_people_by_city_state",
+    "module": "find_people_by_city_state",
+    "description": "Find all Person nodes associated with a given city and/or state by searching address-related nodes and properties. Returns person node IDs, labels, and any address context. Use when the user asks 'who lives in [city], [state]' or 'people associated with [city]'.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string",
+          "description": "City name to search for (e.g. 'QUINCY'). Case-insensitive substring match."
+        },
+        "state": {
+          "type": "string",
+          "description": "State abbreviation or name to search for (e.g. 'MA'). Case-insensitive substring match. Optional."
+        }
+      },
+      "required": [
+        "city"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-04-24T19:16:44.951251+00:00"
+  }
+]

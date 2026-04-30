@@ -1,0 +1,5 @@
+scenario_id,scenario_type,suspiciousness,description
+SCN_0001,baseline_world,baseline,"Background insured population with mostly local, sparse relationships."
+SCN_0002,explicit_suspicious_motif,suspicious,"Shared bank accounts across distant addresses, concentrated claims, and agent-claimant overlap."
+SCN_0003,ambiguous_weak_signal,ambiguous,Cross-household but plausible support ties and mixed-status policy activity.
+SCN_0004,structural_bridge_anomaly,ambiguous,Bridge-like links between otherwise separate clusters via policy and social edges.
