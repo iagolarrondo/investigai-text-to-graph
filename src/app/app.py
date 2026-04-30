@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
@@ -50,6 +51,9 @@ from src.app.entity_resolution import (  # noqa: E402
 )
 from src.graph_query.query_graph import get_graph, load_graph, summarize_graph  # noqa: E402
 from src.llm.tool_agent import ToolAgentResult, run_tool_planner_agent  # noqa: E402
+from src.session.context_resolver import resolve_question_with_session_memory  # noqa: E402
+from src.session.memory import build_turn_from_result, serialize_turn  # noqa: E402
+from src.session.report import build_session_report_html  # noqa: E402
 
 
 def _ensure_graph_loaded() -> bool:
@@ -167,6 +171,31 @@ def _render_tool_planner_result(tr: ToolAgentResult) -> None:
     _render_investigation_graph(tr)
 
 
+def _render_session_history(turns: list[dict]) -> None:
+    st.subheader("Session history")
+    if not turns:
+        st.caption("No turns in this session yet.")
+        return
+    for row in reversed(turns):
+        turn_id = row.get("turn_id", "?")
+        uq = str(row.get("user_question", "")).strip()
+        iq = str(row.get("investigation_question", "")).strip()
+        ans = str(row.get("final_answer", "")).strip()
+        with st.expander(f"Turn {turn_id}: {uq[:90] or '(empty question)'}", expanded=False):
+            st.markdown(f"**User question**\n\n{uq or '_None_'}")
+            if iq and iq != uq:
+                st.markdown(f"**Resolved investigation question**\n\n{iq}")
+            if ans:
+                st.markdown("**Answer**")
+                st.markdown(ans)
+            focus = row.get("graph_focus_node_id")
+            if focus:
+                st.caption(f"Graph focus: `{focus}`")
+            anchors = row.get("anchors") or []
+            if anchors:
+                st.caption("Anchors: " + ", ".join(f"`{x}`" for x in anchors[:8]))
+
+
 def main() -> None:
     st.set_page_config(
         page_title="InvestigAI PoC v1",
@@ -194,6 +223,35 @@ def main() -> None:
     c1.metric("Nodes", summary["num_nodes"])
     c2.metric("Edges", summary["num_edges"])
     c3.metric("Directed", "yes" if summary["is_directed"] else "no")
+
+    if "session_turns" not in st.session_state:
+        st.session_state["session_turns"] = []
+    if "ctx_status" not in st.session_state:
+        st.session_state["ctx_status"] = "idle"
+    if "ctx_last_decision" not in st.session_state:
+        st.session_state["ctx_last_decision"] = None
+
+    st.divider()
+
+    h1, h2 = st.columns([2, 1])
+    with h1:
+        _render_session_history(st.session_state.get("session_turns") or [])
+    with h2:
+        turns = st.session_state.get("session_turns") or []
+        report_html = build_session_report_html(turns)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        st.download_button(
+            "Export session report (HTML)",
+            data=report_html.encode("utf-8"),
+            file_name=f"investigai_session_report_{stamp}.html",
+            mime="text/html",
+            disabled=not bool(turns),
+        )
+        if st.button("Clear session memory", type="secondary", use_container_width=True):
+            st.session_state["session_turns"] = []
+            st.session_state["ctx_last_decision"] = None
+            st.session_state["ctx_status"] = "idle"
+            st.caption("Session memory cleared.")
 
     st.divider()
 
@@ -237,84 +295,133 @@ def main() -> None:
         if not q:
             st.warning("Enter a question, then click **Run investigation**.")
         else:
-            # If the question already contains node ids, skip entity resolution.
-            if question_already_has_node_ids(q):
-                st.session_state["er_status"] = "idle"
-                st.session_state["er_pending_question"] = q
+            turns = st.session_state.get("session_turns") or []
+            decision = resolve_question_with_session_memory(q, turns)
+            st.session_state["ctx_last_decision"] = {
+                "action": decision.action,
+                "rationale": decision.rationale,
+                "resolved_question": decision.resolved_question,
+                "clarification_prompt": decision.clarification_prompt,
+                "used_llm_fallback": decision.used_llm_fallback,
+            }
+            if decision.action == "clarify":
+                st.session_state["ctx_status"] = "clarify"
+                st.session_state["ctx_pending_question"] = q
+                st.session_state["ctx_pending_resolved_question"] = decision.resolved_question
+                st.session_state["ctx_clarification_prompt"] = decision.clarification_prompt
             else:
-                st.session_state["er_pending_question"] = q
-                st.session_state["er_status"] = "picking"
-
-                # Streamlit hot-reload can race module updates. Avoid `from ... import name`
-                # so missing attributes don't crash the run.
-                try:
-                    from src.llm import entity_resolution as _er  # type: ignore
-                except Exception as exc:
-                    _er = None
-                    mentions = []
-                    mention_dbg = {
-                        "backend": "",
-                        "raw_preview": "",
-                        "error": f"import_failed: {type(exc).__name__}: {exc}",
-                    }
+                st.session_state["ctx_status"] = "idle"
+                q_for_er = (decision.resolved_question or q).strip()
+                st.session_state["ctx_pending_question"] = q
+                st.session_state["ctx_pending_resolved_question"] = q_for_er
+                # If the resolved question already contains node ids, skip entity resolution.
+                if question_already_has_node_ids(q_for_er):
+                    st.session_state["er_status"] = "idle"
+                    st.session_state["er_pending_question"] = q_for_er
                 else:
-                    fn = getattr(_er, "extract_entity_mentions_with_debug", None)
-                    if callable(fn):
-                        mentions, mention_dbg = fn(q)
-                    else:
-                        # Fall back to non-debug extractor if only that is available.
-                        fn2 = getattr(_er, "extract_entity_mentions", None)
-                        mentions = fn2(q) if callable(fn2) else []
+                    st.session_state["er_pending_question"] = q_for_er
+                    st.session_state["er_status"] = "picking"
+
+                    # Streamlit hot-reload can race module updates. Avoid `from ... import name`
+                    # so missing attributes don't crash the run.
+                    try:
+                        from src.llm import entity_resolution as _er  # type: ignore
+                    except Exception as exc:
+                        _er = None
+                        mentions = []
                         mention_dbg = {
                             "backend": "",
                             "raw_preview": "",
-                            "error": "extract_entity_mentions_with_debug_missing",
+                            "error": f"import_failed: {type(exc).__name__}: {exc}",
                         }
-                if not mentions:
-                    mentions = fallback_mentions(q)
-                st.session_state["er_mentions"] = mentions
-
-                # Build candidates + auto-select singletons.
-                selections: dict[str, str] = {}
-                cand_map: dict[str, list[dict]] = {}
-                unmapped: list[str] = []
-                any_ambiguous = False
-                for m in mentions[:5]:
-                    mention_raw = str(m.get("mention", "")).strip()
-                    if not mention_raw:
-                        continue
-                    # Map to the exact substring in the user's question (case/punctuation-insensitive).
-                    span = locate_mention_span(q, mention_raw)
-                    if span is None:
-                        # Still allow disambiguation even if we can't find an exact substring to replace.
-                        mention = mention_raw
-                        unmapped.append(mention_raw)
                     else:
-                        mention = q[span[0] : span[1]]
-                    hint = m.get("node_type_hint")
-                    hint_s = str(hint).strip() if hint is not None else None
-                    cands = candidate_nodes(mention=mention, node_type_hint=hint_s, limit=25)
-                    if not cands:
-                        continue
-                    cand_map[mention] = [c.__dict__ for c in cands]
-                    if len(cands) == 1:
-                        selections[mention] = cands[0].node_id
-                    else:
-                        any_ambiguous = True
-                st.session_state["er_candidates"] = cand_map
-                st.session_state["er_selections"] = selections
-                st.session_state["er_unmapped_mentions"] = unmapped
-                st.session_state["er_debug"] = {
-                    "mentions": mentions,
-                    "mention_extractor_debug": mention_dbg,
-                    "candidate_counts": {k: len(v or []) for k, v in cand_map.items()},
-                    "unmapped_mentions": unmapped,
-                    "any_ambiguous": any_ambiguous,
-                }
+                        fn = getattr(_er, "extract_entity_mentions_with_debug", None)
+                        if callable(fn):
+                            mentions, mention_dbg = fn(q_for_er)
+                        else:
+                            # Fall back to non-debug extractor if only that is available.
+                            fn2 = getattr(_er, "extract_entity_mentions", None)
+                            mentions = fn2(q_for_er) if callable(fn2) else []
+                            mention_dbg = {
+                                "backend": "",
+                                "raw_preview": "",
+                                "error": "extract_entity_mentions_with_debug_missing",
+                            }
+                    if not mentions:
+                        mentions = fallback_mentions(q_for_er)
+                    st.session_state["er_mentions"] = mentions
 
-                if not cand_map or not any_ambiguous:
-                    # Nothing to disambiguate (or only singletons) — run immediately.
-                    st.session_state["er_status"] = "idle"
+                    # Build candidates + auto-select singletons.
+                    selections: dict[str, str] = {}
+                    cand_map: dict[str, list[dict]] = {}
+                    unmapped: list[str] = []
+                    any_ambiguous = False
+                    for m in mentions[:5]:
+                        mention_raw = str(m.get("mention", "")).strip()
+                        if not mention_raw:
+                            continue
+                        # Map to the exact substring in the user's question (case/punctuation-insensitive).
+                        span = locate_mention_span(q_for_er, mention_raw)
+                        if span is None:
+                            # Still allow disambiguation even if we can't find an exact substring to replace.
+                            mention = mention_raw
+                            unmapped.append(mention_raw)
+                        else:
+                            mention = q_for_er[span[0] : span[1]]
+                        hint = m.get("node_type_hint")
+                        hint_s = str(hint).strip() if hint is not None else None
+                        cands = candidate_nodes(mention=mention, node_type_hint=hint_s, limit=25)
+                        if not cands:
+                            continue
+                        cand_map[mention] = [c.__dict__ for c in cands]
+                        if len(cands) == 1:
+                            selections[mention] = cands[0].node_id
+                        else:
+                            any_ambiguous = True
+                    st.session_state["er_candidates"] = cand_map
+                    st.session_state["er_selections"] = selections
+                    st.session_state["er_unmapped_mentions"] = unmapped
+                    st.session_state["er_debug"] = {
+                        "mentions": mentions,
+                        "mention_extractor_debug": mention_dbg,
+                        "candidate_counts": {k: len(v or []) for k, v in cand_map.items()},
+                        "unmapped_mentions": unmapped,
+                        "any_ambiguous": any_ambiguous,
+                    }
+
+                    if not cand_map or not any_ambiguous:
+                        # Nothing to disambiguate (or only singletons) — run immediately.
+                        st.session_state["er_status"] = "idle"
+
+    if st.session_state.get("ctx_status") == "clarify":
+        prompt = str(st.session_state.get("ctx_clarification_prompt") or "").strip()
+        if not prompt:
+            prompt = "Please clarify what entity or result from earlier turns this follow-up refers to."
+        st.warning(prompt)
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Run as typed", key="ctx_run_as_typed", type="primary"):
+                st.session_state["er_status"] = "idle"
+                st.session_state["er_pending_question"] = str(st.session_state.get("ctx_pending_question") or "").strip()
+                st.session_state["ctx_status"] = "idle"
+        with c2:
+            if st.button("Cancel", key="ctx_cancel"):
+                st.session_state["ctx_status"] = "idle"
+                st.session_state["ctx_pending_question"] = ""
+                st.session_state["ctx_pending_resolved_question"] = ""
+                st.stop()
+
+    last_decision = st.session_state.get("ctx_last_decision")
+    if isinstance(last_decision, dict):
+        action = str(last_decision.get("action", "pass_through"))
+        rationale = str(last_decision.get("rationale", "")).strip()
+        resolved_q = str(last_decision.get("resolved_question", "")).strip()
+        if action == "rewrite" and resolved_q:
+            st.caption("Session context resolver rewrote your question for this turn.")
+            with st.expander("Resolved question preview", expanded=False):
+                st.code(resolved_q, language=None)
+        if rationale:
+            st.caption(f"Context resolver rationale: {rationale}")
 
     # Render picker UI when needed.
     if st.session_state.get("er_status") == "picking":
@@ -415,7 +522,19 @@ def main() -> None:
                     recent.markdown("**Recent activity**\n\n" + "\n".join(f"- {t}" for t in tail))
 
                 with st.spinner("Working…"):
-                    st.session_state["last_tool_run"] = run_tool_planner_agent(q_to_run, progress_cb=_progress_cb)
+                    tr = run_tool_planner_agent(q_to_run, progress_cb=_progress_cb)
+                    st.session_state["last_tool_run"] = tr
+                    turn_id = len(st.session_state.get("session_turns") or []) + 1
+                    user_q = str(st.session_state.get("ctx_pending_question") or q_to_run).strip()
+                    turn = build_turn_from_result(
+                        turn_id=turn_id,
+                        user_question=user_q,
+                        investigation_question=q_to_run,
+                        result=tr,
+                    )
+                    turns = list(st.session_state.get("session_turns") or [])
+                    turns.append(serialize_turn(turn))
+                    st.session_state["session_turns"] = turns[-30:]
             except Exception as exc:
                 st.error("Run failed — see details below.")
                 st.exception(exc)
