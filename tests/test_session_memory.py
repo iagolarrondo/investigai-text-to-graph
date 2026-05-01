@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.llm.tool_agent import ToolAgentResult, ToolAgentStep
-from src.session.memory import build_memory_digest, build_turn_from_result, serialize_turn
+from src.session.memory import build_memory_digest, build_turn_from_result, merge_session_referents, serialize_turn
 
 
 def test_build_turn_from_result_captures_focus_and_anchors() -> None:
@@ -22,6 +22,8 @@ def test_build_turn_from_result_captures_focus_and_anchors() -> None:
     assert row["graph_focus_node_id"] == "Person|1004"
     assert "Person|1004" in row["anchors"]
     assert "Policy|POL001" in row["anchors"]
+    assert row.get("active_referents", {}).get("primary_person") == "Person|1004"
+    assert isinstance(row.get("answer_summary_bullets"), list)
 
 
 def test_build_memory_digest_recent_rollup() -> None:
@@ -36,6 +38,8 @@ def test_build_memory_digest_recent_rollup() -> None:
             "anchors": ["Person|1004", "Claim|C1"],
             "reviewer_notes": [],
             "synthesis_rationale": "",
+            "active_referents": {},
+            "answer_summary_bullets": [],
         },
         {
             "turn_id": 2,
@@ -47,6 +51,8 @@ def test_build_memory_digest_recent_rollup() -> None:
             "anchors": ["Claim|C1", "Policy|POL1"],
             "reviewer_notes": [],
             "synthesis_rationale": "",
+            "active_referents": {},
+            "answer_summary_bullets": [],
         },
     ]
     digest = build_memory_digest(turns, last_n=2)
@@ -54,4 +60,11 @@ def test_build_memory_digest_recent_rollup() -> None:
     assert digest.recent_questions == ["Q1", "Q2"]
     assert "Claim|C1" in digest.recent_focus_node_ids
     assert "Policy|POL1" in digest.recent_anchor_ids
+
+
+def test_merge_session_referents_carries_forward() -> None:
+    a = merge_session_referents({}, {"primary_person": "Person|1"})
+    b = merge_session_referents(a, {"primary_claim": "Claim|C2"})
+    assert b["primary_person"] == "Person|1"
+    assert b["primary_claim"] == "Claim|C2"
 

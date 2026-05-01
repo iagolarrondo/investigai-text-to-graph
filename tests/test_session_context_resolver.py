@@ -21,6 +21,8 @@ def _turn(
         "anchors": anchors,
         "reviewer_notes": [],
         "synthesis_rationale": "",
+        "active_referents": {},
+        "answer_summary_bullets": [],
     }
 
 

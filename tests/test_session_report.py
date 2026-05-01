@@ -14,10 +14,14 @@ def test_build_session_report_html_contains_turn_data() -> None:
                 "graph_focus_node_id": "Person|1004",
                 "anchors": ["Person|1004"],
                 "reviewer_notes": [],
+                "active_referents": {},
+                "answer_summary_bullets": ["Point one."],
             }
         ]
     )
-    assert "InvestigAI Session Report" in html
+    assert "session report" in html.lower()
     assert "Who is Person|1004?" in html
     assert "Person|1004" in html
+    assert "chip-person" in html
+    assert "Point one." in html
 

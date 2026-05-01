@@ -4,19 +4,19 @@ overview: Design session-scoped conversational memory as a pre-investigation con
 todos:
   - id: map-memory-record
     content: Define session turn and digest data models from existing ToolAgentResult outputs.
-    status: pending
+    status: cancelled
   - id: add-preinvestigation-resolver
     content: Insert standalone/rewrite/clarify resolver before run_tool_planner_agent without changing orchestration.
-    status: pending
+    status: cancelled
   - id: render-chat-history
     content: Add visible session history UI backed by session_state turns.
-    status: pending
+    status: cancelled
   - id: export-html-report
     content: Add structured user-facing HTML session export button and generator.
-    status: pending
+    status: cancelled
   - id: tests-and-thresholds
     content: Add unit tests and conservative rewrite/clarification thresholds to avoid regressions.
-    status: pending
+    status: cancelled
 isProject: false
 ---
 

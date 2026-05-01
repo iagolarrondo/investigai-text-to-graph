@@ -1,5 +1,7 @@
 # Current Repository Inspection (Pre-change)
 
+> **Stale snapshot:** This file described the repo **before** several PoC upgrades (synthetic pipeline, tool-planner investigation UI, **`src/session/`** memory + HTML export). For the **current** Streamlit flow, start with **[README.md](../README.md)** (investigation loop, session memory, entity resolution). Treat the sections below as historical context unless you are diffing against an old revision.
+
 ## Actual runtime flow (from code)
 
 1. Operational seed CSVs live under `data/interim/poc_v1_seed/`.

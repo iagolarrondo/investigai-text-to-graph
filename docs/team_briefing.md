@@ -9,7 +9,7 @@
 - **Synthetic seed dataset** (`data/interim/poc_v1_seed/`) — small CSV extracts (people, policies, claims, banks, addresses, businesses, crosswalks) that tell a coherent demo story.
 - **Graph build script** — reads the seed and writes **`nodes.csv`** and **`edges.csv`** under `data/processed/`, with basic validation (e.g. edges point to existing nodes).
 - **Query module** — loads the graph in memory and runs investigation-style queries (claim neighborhood, shared banks, family-style clusters, business–address overlap). Results include **tables**, a **short explanation**, and **supporting graph links** for investigator-facing demos.
-- **Streamlit app** — predefined questions, free-text input, **rule-based** question routing (no LLM API required for the current path), and a **small subgraph** view after each answer.
+- **Streamlit app** — free-text investigations via an LLM **tool planner → judge → synthesis** loop on `query_graph` tools; **session-scoped memory** (same tab) for follow-up rewrite/clarify, optional entity picks, **HTML session export**, and a **summary subgraph** after each answer. Hosted or local LLM keys are required for investigations (see README).
 - **Light quality checks** — pytest smoke tests on the processed CSVs; README and supporting docs (`demo_cases`, `technical_flow`, `roadmap`) for onboarding and demos.
 
 ---
