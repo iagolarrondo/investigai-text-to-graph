@@ -12,7 +12,7 @@ The PoC is a **local pipeline** that turns **tabular seed extracts** into a **pr
 
 - **Build:** Python reads normalized “resolved” and policy/claim tables, assigns stable **node ids**, and emits **edges** only when both endpoints exist.
 - **Query:** Code loads the CSVs into an in-memory graph (NetworkX), runs focused queries (claim neighborhood, shared banks, family clusters, business–address overlap), and returns tables plus short narratives.
-- **App:** Streamlit loads the graph once per browser session (`st.session_state`). Each question can be adjusted by **session memory** (rewrite / clarify follow-ups from prior turns, then optional entity-resolution picks) before the **unchanged** planner → judge → synthesis run; the UI can **export** an HTML session report or **clear** in-tab memory.
+- **App:** Streamlit loads the graph once per browser session (`st.session_state`). Each question can be adjusted by **session memory** (rewrite / clarify follow-ups from prior turns, then optional entity-resolution picks) before the **unchanged** planner → judge → synthesis run. The investigation home shows **metrics → session (history, HTML export, clear) → composer → outcome-first results** (answer and graph before reviewer / tool metadata). After each completed run, a **`st.rerun()`** refreshes session UI and export data. **`src/app/ui_theme.py`** styles the home column; **`.streamlit/config.toml`** sets shared light tokens. The **Full Interactive Graph** page resets the home max-width constraint and reuses sidebar chrome only—see README.
 
 Code lives mainly under `src/graph_build/`, `src/graph_query/`, `src/llm/`, `src/app/`, and **`src/session/`** (memory + resolver + HTML report helpers).
 

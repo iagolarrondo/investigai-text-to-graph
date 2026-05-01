@@ -38,8 +38,14 @@ The UI is **`src/app/app.py`**. Everything below happens **on your machine** usi
 The main page keeps a **lightweight conversational layer** in Streamlit **`session_state`** only—it does **not** survive a new browser tab, incognito switch, or server restart, and nothing is written to disk for memory by default.
 
 - **Before** pre-run entity resolution and the planner: **`resolve_question_with_session_memory`** (`src/session/context_resolver.py`) may **pass through**, **rewrite** (e.g. pronouns or “that claim” → concrete node ids from recent turns + rolling referents), or **clarify** (block with a short prompt until the user runs as typed or cancels). Deterministic rules run first; an optional **LLM fallback** runs for harder contextual follow-ups when **`SESSION_MEMORY_LLM_REWRITE`** is on (see **`.env.example`**).
-- **After** a successful investigation, a compact turn record is appended to **`session_turns`** and **`session_active_referents`** is merged from anchors / graph focus (`src/session/memory.py`). The UI shows a **session history** panel; **Export session report (HTML)** downloads a readable summary via **`build_session_report_html`** (`src/session/report.py`). **Clear session memory** resets turns and referents (and resolver UI state keys tied to that flow).
+- **After** a successful investigation, a compact turn record is appended to **`session_turns`** and **`session_active_referents`** is merged from anchors / graph focus (`src/session/memory.py`). The app then **`st.rerun()`** once so the **Session** block (history + **Export session report (HTML)**) reflects the new turn on the same completion—no extra click needed. **Clear session memory** resets turns and referents (and resolver-related keys). Export uses **`build_session_report_html`** (`src/session/report.py`).
 - **Core orchestration is unchanged:** once the question is finalized for the run, execution is still **`run_tool_planner_agent`** → coverage judge → synthesis as in **`src/llm/orchestration.py`**.
+
+##### Main investigation page layout (UI)
+
+Rough **top-to-bottom** order on **`src/app/app.py`**: graph metrics → **Session** (history expanders, HTML export, clear) → **Investigate** (composer in a bordered container) → optional clarify / entity picker → **results** when a run exists. Styling is **`src/app/ui_theme.py`** (scoped to the main column where possible) plus **`.streamlit/config.toml`** for shared light theme tokens.
+
+**Results** are **outcome-first**: synthesized **Answer** (with optional **Key findings** bullets), **Investigation graph** (pyvis + hop slider), then **Reviewer**, **Tool evaluation**, and **Tool steps** (latter sections mostly collapsed expanders). This ordering is presentation-only; tools and prompts are unchanged.
 
 **Preflight and optional extensions** — Before the planner, a **preflight** LLM pass classifies whether the **current** tool catalog can answer the question fully and efficiently (`sufficient` / `insufficient` / `sufficient_but_inefficient`) and may suggest a short plan; that text is appended to the planner’s first user turn when present. With **`INVESTIGATION_EXTENSION_AUTHORING=1`** (see **`.env.example`**), a non-`sufficient` preflight can trigger **code authoring**: a new module under **`src/graph_query/generated/`**, an entry in **`src/graph_query/extension_registry.json`**, and a **`pytest`** smoke gate (`tests/test_graph_extensions_smoke.py`). Successful extensions merge into the tool list for the rest of the run and after restart; **commit** those files to share. Default is authoring **off**.
 
@@ -80,11 +86,11 @@ User question
         → (optional) Tool preflight on catalog → (optional) extension authoring + registry merge
         → LLM tool-calling loop (Gemini, Anthropic, or Ollama) → query_graph.* (zero or more tool calls per planner phase)
         → Coverage judge on full trace → repeat if needed
-        → Synthesis → Streamlit: tool trace + reviewer rounds + Answer + investigation graph
-        → Append turn to session_turns; merge session_active_referents; history + HTML export available
+        → Synthesis → Streamlit: outcome-first results (answer, graph, then reviewer / tool eval / steps)
+        → Append turn to session_turns; merge session_active_referents; st.rerun() refreshes session UI + export payload
 ```
 
-**Full Interactive Graph** (`src/app/pages/1_Full_Interactive_Graph.py`) uses pyvis; the **Node inspector** and sidebar **Focus node** share one focus so choosing a node updates the N-hop subgraph the same as clicking that node in the view. The main investigation page focuses on the tool trace and answer.
+**Full Interactive Graph** (`src/app/pages/1_Full_Interactive_Graph.py`) uses pyvis; the **Node inspector** and sidebar **Focus node** share one focus so choosing a node updates the N-hop subgraph the same as clicking that node in the view. That page is **not** a full UI redesign of the investigation home: it calls **`inject_sidebar_chrome_styles`** + **`inject_secondary_page_layout_reset`** (from `ui_theme.py`) so shared sidebar chrome and global theme apply, while the home page’s **editorial max-width** does not constrain the graph layout.
 
 ---
 
@@ -102,7 +108,8 @@ User question
 | `src/graph_build/` | Builds graph CSVs from a seed directory (`build_graph_files.py`). |
 | `src/graph_query/` | Loads the graph and runs investigation-style queries; optional **`extension_registry.json`** + **`generated/*.py`** for LLM-authored tools. |
 | `src/llm/` | **Tool planner** (`tool_agent.py`), **Gemini** / **Anthropic** / **Ollama** clients, **orchestrator** (`orchestration.py`), **prompts** (`prompts.py`), **router** (`router.py`, rule-based routing for optional flows). |
-| `src/app/` | Streamlit UI: **`app.py`** (session resolver + entity resolution + planner → judge → synthesis + summary graph); **`entity_resolution.py`**; **`investigation_graph.py`**; optional **pages** under `src/app/pages/`. |
+| `src/app/` | Streamlit UI: **`app.py`** (session resolver + entity resolution + planner → judge → synthesis + summary graph); **`ui_theme.py`** (main-page styling); **`entity_resolution.py`**; **`investigation_graph.py`**; optional **pages** under `src/app/pages/`. |
+| `.streamlit/` | Optional **`config.toml`** for shared Streamlit theme tokens (light cream palette). |
 | `src/session/` | Session-scoped memory: **`context_resolver.py`**, **`memory.py`**, **`report.py`** (HTML export), **`node_id_canonical.py`**. |
 | `tests/` | Smoke tests on processed CSVs (supports builder and Neo4j column layouts). |
 | `docs/` | Design notes and **[demo scenario cheat sheet](docs/demo_cases.md)**. |
@@ -288,7 +295,8 @@ pytest tests/ -v
 
 ```bash
 PYTHONPATH=. pytest tests/test_session_memory.py tests/test_session_context_resolver.py \
-  tests/test_session_report.py tests/test_session_node_id_canonical.py tests/test_entity_graph_anchors.py -q
+  tests/test_session_report.py tests/test_session_regression.py tests/test_session_node_id_canonical.py \
+  tests/test_entity_graph_anchors.py tests/test_entity_resolution.py -q
 ```
 
 ---

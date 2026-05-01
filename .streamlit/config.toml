@@ -1,0 +1,9 @@
+# Shared defaults for all pages. Investigation home adds scoped CSS in `src/app/ui_theme.py`.
+# Slightly higher contrast than before so sidebar/widgets don’t read as empty “slots”.
+
+[theme]
+base = "light"
+primaryColor = "#4d584c"
+backgroundColor = "#ebe6db"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1f1f22"

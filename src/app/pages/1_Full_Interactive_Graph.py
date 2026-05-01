@@ -28,6 +28,7 @@ from src.app.graph_viz import (  # noqa: E402
     build_pyvis_html,
     nodes_within_depth,
 )
+from src.app.ui_theme import inject_secondary_page_layout_reset, inject_sidebar_chrome_styles  # noqa: E402
 from src.graph_query.query_graph import get_graph, load_graph  # noqa: E402
 
 _FOCUS_SENTINEL = "— no focus —"
@@ -41,6 +42,8 @@ def _load() -> None:
 
 
 st.set_page_config(page_title="Full Interactive Graph — InvestigAI", layout="wide", page_icon="🕸️")
+inject_sidebar_chrome_styles()
+inject_secondary_page_layout_reset()
 st.title("🕸️ Full Interactive Graph")
 st.markdown(
     "Explore the full investigation graph. **Hover** nodes for details, "

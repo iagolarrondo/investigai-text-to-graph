@@ -49,7 +49,7 @@ PYTHONPATH=. python src/graph_query/query_graph.py
 | **Presenter notes** | `docs/demo_cases.md` — scenario names, entities, “what to mention.” |
 | **If asked “where does data come from?”** | `data/interim/poc_v1_seed/` (inputs) → `data/processed/*.csv` (graph export). |
 
-**Session memory (optional talking point):** Follow-up questions in the same tab can be **rewritten** (e.g. pronouns → node ids) or **clarified** before the next investigation. **Clear session memory** resets that state; **Export session report (HTML)** downloads a clean multi-turn summary. Nothing is persisted server-side for chat memory—see **[README.md](../README.md)** §2.2.
+**Session memory (optional talking point):** Follow-up questions in the same tab can be **rewritten** (e.g. pronouns → node ids) or **clarified** before the next investigation. **Session** sits **above** the question box; **Clear session memory** resets turns; **Export session report (HTML)** matches the current **`session_turns`** after each run (the app **reruns** once when a turn completes so history and export stay in sync). Nothing is persisted server-side for chat memory—see **[README.md](../README.md)** §2.2.
 
 Do **not** rely on notebooks for the core demo unless you explicitly want a detour.
 
