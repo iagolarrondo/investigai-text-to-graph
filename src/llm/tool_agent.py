@@ -13,17 +13,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-try:
-    from pathlib import Path
-    from dotenv import load_dotenv
+from src.project_env import load_project_dotenv
 
-    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-except ImportError:
-    pass
+load_project_dotenv()
 
 import pandas as pd
 
 from src.graph_query import query_graph as qg
+from src.graph_query.native_read_mode import neo4j_native_reads_enabled
 from src.llm.prompts import SYSTEM_TOOL_AGENT
 from src.llm.result_serialize import investigation_payload_to_text
 
@@ -47,10 +44,21 @@ def investigation_llm_backend() -> str:
 def normalize_person_node_id(raw: str) -> str:
     """
     Coerce ``1004``, ``person 1004`` → ``Person|1004`` when no pipe id is given.
+
+    If ``raw`` is already a valid Person node id in the loaded graph (e.g. ``person_5001``),
+    it is returned unchanged — no reformatting is applied.
     """
     s = (raw or "").strip()
     if not s:
         return s
+    # Passthrough: raw value is already a live node in the graph.
+    if not neo4j_native_reads_enabled():
+        try:
+            G = qg.get_graph()
+            if s in G.nodes and G.nodes[s].get("node_type") == "Person":
+                return s
+        except RuntimeError:
+            pass
     if "|" in s:
         return s
     if s.isdigit():
@@ -64,10 +72,21 @@ def normalize_person_node_id(raw: str) -> str:
 def normalize_policy_node_id(raw: str) -> str:
     """
     Coerce ``POL001`` → ``Policy|POL001`` when no pipe id is given (matches demo ids).
+
+    If ``raw`` is already a valid Policy node id in the loaded graph (e.g. ``policy_POL-LTC-10001``),
+    it is returned unchanged — no reformatting is applied.
     """
     s = (raw or "").strip()
     if not s:
         return s
+    # Passthrough: raw value is already a live node in the graph.
+    if not neo4j_native_reads_enabled():
+        try:
+            G = qg.get_graph()
+            if s in G.nodes and G.nodes[s].get("node_type") == "Policy":
+                return s
+        except RuntimeError:
+            pass
     if "|" in s:
         return s
     if re.match(r"^POL\d+$", s, re.IGNORECASE):
@@ -131,10 +150,27 @@ def normalize_claim_node_id(raw: str) -> str:
     Accepts e.g. ``Claim|C005``, ``claim_C005``, ``Claim 005``, ``C005``, ``005`` (demo CSVs
     use ``Claim|C00n``). When the graph is loaded, picks the first candidate that exists as a
     Claim node; otherwise returns the first candidate (caller may still get KeyError).
+
+    If ``raw`` is already a valid Claim node id in the loaded graph (e.g. ``claim_C9000000001``),
+    it is returned unchanged — no reformatting is applied.
     """
+    s = (raw or "").strip()
+    # Passthrough: raw value is already a live Claim node in the graph.
+    if not neo4j_native_reads_enabled():
+        try:
+            G = qg.get_graph()
+            if s in G.nodes and G.nodes[s].get("node_type") == "Claim":
+                return s
+        except RuntimeError:
+            pass
     cands = claim_node_id_candidates(raw)
     if not cands:
-        return (raw or "").strip()
+        return s
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_reads as nnr
+
+        hit = nnr.claim_node_id_first_match(cands)
+        return hit if hit else cands[0]
     try:
         G = qg.get_graph()
     except RuntimeError:
@@ -448,8 +484,14 @@ def _execute_graph_tool_raw(name: str, tool_input: dict[str, Any]) -> str:
 
         if name == "get_neighbors":
             nid = str(tool_input["node_id"]).strip()
+            # Normalize claim-looking ids, but skip if the raw id is already in the graph.
             if "|" not in nid and re.search(r"(?i)claim", nid):
-                nid = normalize_claim_node_id(nid)
+                try:
+                    _G = qg.get_graph()
+                    if nid not in _G:
+                        nid = normalize_claim_node_id(nid)
+                except RuntimeError:
+                    nid = normalize_claim_node_id(nid)
             res = qg.get_neighbors(nid)
             return json.dumps(res, indent=2)
 
