@@ -16,13 +16,9 @@ import os
 import re
 from typing import Any
 
-try:
-    from pathlib import Path
-    from dotenv import load_dotenv
+from src.project_env import load_project_dotenv
 
-    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-except ImportError:
-    pass
+load_project_dotenv()
 
 from src.graph_query.query_graph import get_graph
 from src.llm.json_extract import extract_json_object

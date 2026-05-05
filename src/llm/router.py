@@ -8,7 +8,7 @@ the tool-planner orchestrator instead; this module does not require that flow.
 
 API key setup
 ─────────────
-Set your key in the project .env file (recommended):
+Set your key in the project ``.env.example`` file (recommended):
 
     ANTHROPIC_API_KEY=sk-ant-...
 
@@ -16,7 +16,7 @@ Or export it in your shell before running:
 
     export ANTHROPIC_API_KEY=sk-ant-...
 
-The .env file is loaded automatically when this module is imported.
+``.env.example`` is loaded automatically when this module is imported.
 """
 
 from __future__ import annotations
@@ -25,15 +25,11 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
-# Load .env from project root so ANTHROPIC_API_KEY is available
-try:
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-except ImportError:
-    pass  # python-dotenv not installed; rely on shell env
+from src.project_env import load_project_dotenv
+
+load_project_dotenv()
 
 import anthropic
 
@@ -115,7 +111,7 @@ def route_question_llm(question: str) -> RouterDecision:
             anchor_node_id=None,
             claim_node_id=None,
             source="llm",
-            reason="ANTHROPIC_API_KEY is not set. Add it to your .env file.",
+            reason="ANTHROPIC_API_KEY is not set. Add it to your .env.example file.",
         )
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -179,7 +175,7 @@ def route_question_llm(question: str) -> RouterDecision:
             anchor_node_id=None,
             claim_node_id=None,
             source="llm",
-            reason="Invalid ANTHROPIC_API_KEY — check your .env file.",
+            reason="Invalid ANTHROPIC_API_KEY — check your .env.example file.",
         )
     except Exception as exc:
         return RouterDecision(
