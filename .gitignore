@@ -14,10 +14,10 @@ build/
 venv/
 env/
 
-# Environment and secrets
+# Environment and secrets (includes .env.example — keep secrets local only)
 .env
 .env.*
-!.env.example
+.env.example
 
 # Jupyter
 .ipynb_checkpoints/
