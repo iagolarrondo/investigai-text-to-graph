@@ -69,5 +69,32 @@
     },
     "active": true,
     "created_at": "2026-04-24T19:16:44.951251+00:00"
+  },
+  {
+    "name": "find_bank_accounts_linked_to_customer_and_provider",
+    "module": "find_bank_accounts_linked_to_customer_and_provider",
+    "description": "Finds BankAccount nodes that are linked to at least one Customer/Person/Insured node AND at least one HealthcareProvider node simultaneously. Returns matching BankAccount ids with the linked customer/person node ids and provider node ids. Use when the question asks which bank accounts are connected to both a customer (or person/insured) and a healthcare provider — a composite overlap pattern not covered by other tools.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "customer_node_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Node types to treat as 'customer' side. Defaults to ['Person', 'Customer', 'Insured'] if omitted."
+        },
+        "provider_node_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Node types to treat as 'provider' side. Defaults to ['HealthcareProvider', 'Provider', 'Healthcare Provider'] if omitted."
+        }
+      },
+      "required": []
+    },
+    "active": true,
+    "created_at": "2026-04-30T20:38:49.652786+00:00"
   }
 ]
