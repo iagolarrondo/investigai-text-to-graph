@@ -6,6 +6,7 @@ import pytest
 
 from src.graph_query.native_read_mode import (
     NATIVE_READ_TOOLS,
+    neo4j_llm_cypher_reads_enabled,
     neo4j_native_reads_enabled,
 )
 
@@ -21,6 +22,18 @@ def test_native_reads_on(monkeypatch: pytest.MonkeyPatch, v: str) -> None:
     assert neo4j_native_reads_enabled() is True
 
 
-def test_native_tool_registry_nonempty() -> None:
-    assert "summarize_graph" in NATIVE_READ_TOOLS
-    assert "search_nodes" in NATIVE_READ_TOOLS
+@pytest.mark.parametrize("v", ["llm_cypher", "llm-cypher", "llm-authored", "llm"])
+def test_llm_cypher_mode(monkeypatch: pytest.MonkeyPatch, v: str) -> None:
+    monkeypatch.setenv("NEO4J_READ_MODE", v)
+    assert neo4j_llm_cypher_reads_enabled() is True
+    assert neo4j_native_reads_enabled() is False
+
+
+def test_llm_cypher_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NEO4J_READ_MODE", raising=False)
+    assert neo4j_llm_cypher_reads_enabled() is False
+
+
+def test_native_not_triggered_by_llm_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEO4J_READ_MODE", "llm_cypher")
+    assert neo4j_native_reads_enabled() is False

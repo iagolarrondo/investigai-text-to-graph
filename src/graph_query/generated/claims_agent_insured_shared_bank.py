@@ -9,6 +9,13 @@ from src.graph_query.query_graph import get_graph
 
 def run(tool_input: dict[str, Any]) -> str:
     """Registry entrypoint; return JSON or plain text for the planner."""
+    from src.graph_query.native_read_mode import neo4j_native_reads_enabled
+
+    if neo4j_native_reads_enabled():
+        from src.graph_query.neo4j_native_extensions import run_extension_native
+
+        return run_extension_native("claims_agent_insured_shared_bank", tool_input)
+
     G = get_graph()
     limit = int(tool_input.get("limit", 200))
 

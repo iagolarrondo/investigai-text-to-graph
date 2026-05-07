@@ -82,6 +82,18 @@ def load_extension_handlers() -> dict[str, Callable[..., Any]]:
     return handlers
 
 
+def active_extension_tool_names() -> frozenset[str]:
+    """Names of **active** registry extensions (for LLM-Cypher dispatch without loading handlers)."""
+    out: set[str] = set()
+    for e in read_registry_entries():
+        if not e.get("active", True):
+            continue
+        n = str(e.get("name", "")).strip()
+        if n:
+            out.add(n)
+    return frozenset(out)
+
+
 def reserved_tool_names() -> frozenset[str]:
     """Core tool names plus any registered extension names (no collisions)."""
     from src.llm import tool_agent as ta

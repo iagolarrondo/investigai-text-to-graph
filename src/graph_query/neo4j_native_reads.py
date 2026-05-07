@@ -4,8 +4,9 @@ Neo4j **native reads** for investigation tools — same return shapes as ``query
 Natural language → LLM picks **tools** (unchanged) → Python wrappers here run **Cypher** against
 ``:Entity`` / ``:GRAPH_EDGE`` (see ``sync_processed``). No full-graph hydrate.
 
-Unported tools still use NetworkX; load from CSV with ``GRAPH_BACKEND`` unset / ``csv`` so
-``load_graph()`` fills ``_graph`` for viz and legacy paths.
+Internal helpers :func:`list_node_ids_by_type` / :func:`list_edge_rows_by_type` also use Cypher when
+native reads are on. Extension tools delegate from ``generated/*.py`` to
+:mod:`src.graph_query.neo4j_native_extensions` for the same Aura model.
 """
 
 from __future__ import annotations
@@ -17,7 +18,16 @@ import pandas as pd
 
 from src.graph_store.neo4j_read_session import run_read_query, run_read_transaction
 
-__all__ = ["summarize_graph", "get_graph_relationship_catalog", "search_nodes", "get_neighbors", "get_person_policies", "claim_node_id_first_match"]
+__all__ = [
+    "summarize_graph",
+    "get_graph_relationship_catalog",
+    "search_nodes",
+    "get_neighbors",
+    "get_person_policies",
+    "claim_node_id_first_match",
+    "list_node_ids_by_type",
+    "list_edge_rows_by_type",
+]
 
 
 def parse_properties_json(raw: Any) -> dict[str, Any]:
@@ -209,6 +219,54 @@ def get_person_policies(person_node_id: str) -> dict[str, Any]:
         "person_node_id": pid,
         "policies": df,
     }
+
+
+def list_node_ids_by_type(node_type: str) -> list[str]:
+    """All ``node_id`` values with the given ``node_type`` (Neo4j native)."""
+    nt = (node_type or "").strip()
+    if not nt:
+        return []
+    rows = run_read_query(
+        """
+        MATCH (n:Entity {node_type: $nt})
+        RETURN n.node_id AS id
+        ORDER BY id
+        """,
+        {"nt": nt},
+    )
+    return [str(r["id"]) for r in rows]
+
+
+def list_edge_rows_by_type(edge_type: str) -> list[dict[str, Any]]:
+    """Edges with ``edge_type``, same key shape as the NetworkX path in ``query_graph``."""
+    et = (edge_type or "").strip()
+    if not et:
+        return []
+    rows = run_read_query(
+        """
+        MATCH (a:Entity)-[r:GRAPH_EDGE]->(b:Entity)
+        WHERE r.edge_type = $et
+        RETURN a.node_id AS source,
+               b.node_id AS target,
+               r.edge_id AS edge_id,
+               r.edge_type AS edge_type,
+               r.source_table AS source_table,
+               r.properties_json AS properties_json
+        ORDER BY source, target, coalesce(r.edge_id, '')
+        """,
+        {"et": et},
+    )
+    return [
+        {
+            "source": str(r["source"]),
+            "target": str(r["target"]),
+            "edge_id": r.get("edge_id"),
+            "edge_type": r.get("edge_type"),
+            "source_table": r.get("source_table"),
+            "properties_json": r.get("properties_json"),
+        }
+        for r in rows
+    ]
 
 
 def claim_node_id_first_match(candidates: list[str]) -> str | None:

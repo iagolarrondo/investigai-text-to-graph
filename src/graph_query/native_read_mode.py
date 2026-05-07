@@ -4,10 +4,12 @@ Whether investigation reads hit **Neo4j with Cypher** vs scanning **NetworkX**.
 **Architecture (NL → tools → Neo4j)**
 
 1. The planner still selects the same **named tools** (``summarize_graph``, ``search_nodes``, …).
-2. For tools listed in ``NATIVE_READ_TOOLS``, ``query_graph`` delegates to
-   ``neo4j_native_reads`` / ``neo4j_native_heavy`` — Cypher over ``:Entity`` / ``:GRAPH_EDGE``.
-3. Tools not listed still call ``_require_graph()`` (CSV or Aura hydrate).
-4. Recommended: ``NEO4J_READ_MODE=native`` + leave ``GRAPH_BACKEND`` unset so ``load_graph()`` uses **CSV**
+2. **`NEO4J_READ_MODE=native`** — for tools listed in ``NATIVE_READ_TOOLS``, ``query_graph`` delegates to
+   ``neo4j_native_reads`` / ``neo4j_native_heavy`` (hand-written Cypher).
+3. **`NEO4J_READ_MODE=llm_cypher`** — same tool names, but ``tool_agent`` asks the **investigation LLM**
+   to emit read-only Cypher per call; no changes inside ``query_graph`` dispatch.
+4. Tools not listed still call ``_require_graph()`` (CSV or Aura hydrate).
+5. Recommended: ``NEO4J_READ_MODE=native`` or ``llm_cypher`` + leave ``GRAPH_BACKEND`` unset so ``load_graph()`` uses **CSV**
    for pyvis and unported tools, while Aura stays the investigation read path for ported tools.
    Keep CSV and Aura in sync (``sync_processed``).
 
@@ -24,10 +26,20 @@ from contextvars import ContextVar
 _force_networkx_reads: ContextVar[bool] = ContextVar("_force_networkx_reads", default=False)
 
 
+def neo4j_llm_cypher_reads_enabled() -> bool:
+    """True when each tool call is implemented by **LLM-generated** read Cypher (see ``cypher_tool_execution``)."""
+    if _force_networkx_reads.get():
+        return False
+    v = (os.getenv("NEO4J_READ_MODE") or "").strip().lower()
+    return v in ("llm_cypher", "llm-cypher", "llm-authored", "llm")
+
+
 def neo4j_native_reads_enabled() -> bool:
     if _force_networkx_reads.get():
         return False
     v = (os.getenv("NEO4J_READ_MODE") or "").strip().lower()
+    if v in ("llm_cypher", "llm-cypher", "llm-authored", "llm"):
+        return False
     return v in ("native", "cypher", "1", "true", "yes")
 
 
@@ -65,7 +77,29 @@ def temporary_neo4j_read_native():
             os.environ.pop(key, None)
 
 
-# Tools implemented in ``neo4j_native_reads`` — extend as more are ported.
+@contextmanager
+def temporary_neo4j_read_llm_cypher():
+    """
+    Set ``NEO4J_READ_MODE=llm_cypher`` for the block; restore env after.
+
+    Investigation tools run via **LLM-authored Cypher** (``cypher_tool_execution``) instead of
+    ``neo4j_native_*`` Python. Pair with ``temporary_graph`` on a CSV-backed graph like the dual NX vs Cypher flow.
+    """
+    key = "NEO4J_READ_MODE"
+    had = key in os.environ
+    prev = os.environ.get(key, "")
+    os.environ[key] = "llm_cypher"
+    try:
+        yield
+    finally:
+        if had:
+            os.environ[key] = prev
+        else:
+            os.environ.pop(key, None)
+
+
+# Tools implemented in ``neo4j_native_reads`` / ``neo4j_native_heavy`` — extend as more are ported.
+# Registry extensions additionally dispatch to ``neo4j_native_extensions`` from ``generated/*.py``.
 NATIVE_READ_TOOLS: frozenset[str] = frozenset(
     {
         "summarize_graph",

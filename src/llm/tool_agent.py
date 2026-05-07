@@ -20,7 +20,12 @@ load_project_dotenv()
 import pandas as pd
 
 from src.graph_query import query_graph as qg
-from src.graph_query.native_read_mode import neo4j_native_reads_enabled
+from src.graph_query.extension_loader import active_extension_tool_names
+from src.graph_query.native_read_mode import (
+    NATIVE_READ_TOOLS,
+    neo4j_llm_cypher_reads_enabled,
+    neo4j_native_reads_enabled,
+)
 from src.llm.prompts import SYSTEM_TOOL_AGENT
 from src.llm.result_serialize import investigation_payload_to_text
 
@@ -52,7 +57,7 @@ def normalize_person_node_id(raw: str) -> str:
     if not s:
         return s
     # Passthrough: raw value is already a live node in the graph.
-    if not neo4j_native_reads_enabled():
+    if not neo4j_native_reads_enabled() and not neo4j_llm_cypher_reads_enabled():
         try:
             G = qg.get_graph()
             if s in G.nodes and G.nodes[s].get("node_type") == "Person":
@@ -80,7 +85,7 @@ def normalize_policy_node_id(raw: str) -> str:
     if not s:
         return s
     # Passthrough: raw value is already a live node in the graph.
-    if not neo4j_native_reads_enabled():
+    if not neo4j_native_reads_enabled() and not neo4j_llm_cypher_reads_enabled():
         try:
             G = qg.get_graph()
             if s in G.nodes and G.nodes[s].get("node_type") == "Policy":
@@ -156,7 +161,7 @@ def normalize_claim_node_id(raw: str) -> str:
     """
     s = (raw or "").strip()
     # Passthrough: raw value is already a live Claim node in the graph.
-    if not neo4j_native_reads_enabled():
+    if not neo4j_native_reads_enabled() and not neo4j_llm_cypher_reads_enabled():
         try:
             G = qg.get_graph()
             if s in G.nodes and G.nodes[s].get("node_type") == "Claim":
@@ -166,7 +171,7 @@ def normalize_claim_node_id(raw: str) -> str:
     cands = claim_node_id_candidates(raw)
     if not cands:
         return s
-    if neo4j_native_reads_enabled():
+    if neo4j_native_reads_enabled() or neo4j_llm_cypher_reads_enabled():
         from src.graph_query import neo4j_native_reads as nnr
 
         hit = nnr.claim_node_id_first_match(cands)
@@ -455,6 +460,18 @@ def _format_tool_payload(payload: dict[str, Any], *, truncate: bool = True) -> s
 def _execute_graph_tool_raw(name: str, tool_input: dict[str, Any]) -> str:
     """Run one tool; return full text before context-window truncation."""
     try:
+        if neo4j_llm_cypher_reads_enabled():
+            from src.llm.cypher_tool_execution import (
+                execute_extension_via_llm_cypher,
+                execute_tool_via_llm_cypher,
+            )
+
+            if name in active_extension_tool_names():
+                return execute_extension_via_llm_cypher(name, dict(tool_input))
+            if name in NATIVE_READ_TOOLS:
+                return execute_tool_via_llm_cypher(name, dict(tool_input))
+            return f"Unknown tool: {name}"
+
         ext_fn = _EXTENSION_HANDLERS.get(name)
         if ext_fn is not None:
             out = ext_fn(dict(tool_input))
