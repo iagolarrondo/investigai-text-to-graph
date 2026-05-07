@@ -53,7 +53,6 @@ from src.app.entity_resolution import (  # noqa: E402
     locate_mention_span,
     rewrite_question,
     unresolved_graph_like_id_tokens,
-    verified_graph_anchor_spans,
 )
 from src.graph_query.native_read_mode import force_networkx_reads, temporary_neo4j_read_native  # noqa: E402
 from src.graph_query.query_graph import get_graph, load_graph, summarize_graph  # noqa: E402

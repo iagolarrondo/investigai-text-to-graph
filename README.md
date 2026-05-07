@@ -1,5 +1,7 @@
 # InvestigAI — graph investigation prototype (PoC v1 + scalable synthetic generation)
 
+**Integration branch:** Team review of **session-scoped memory**, **HTML session export**, and **main-line** features (Neo4j tooling, **NetworkX vs Neo4j compare** on the home page, evals / backend-comparison pages) may use **`integrate/main-into-session-memory`**. Until that merges to **`main`**, treat the default branch in GitHub as potentially behind this doc.
+
 ## 1. Project overview
 
 This repository is a **small prototype** for an **LTC fraud-investigation copilot** built around a **graph**: people, policies, claims, banks, addresses, and businesses as **nodes**, and relationships (for example *insured on policy*, *claim against policy*, *shared bank account*) as **edges**.
@@ -16,12 +18,12 @@ This repository is a **small prototype** for an **LTC fraud-investigation copilo
 
 ## 2. How the app works
 
-The UI is **`src/app/app.py`**. Everything below happens **on your machine** using the CSVs in `data/processed/`.
+The UI is **`src/app/app.py`**. By default the runtime graph comes from **`data/processed/`** CSVs on your machine; with **`GRAPH_BACKEND=neo4j`** (see **`env.template`**) the same tools can run against a **Neo4j** instance instead.
 
 ### 2.1 Load the graph
 
-1. `query_graph.load_graph()` reads **`nodes.csv`** and **`edges.csv`**.
-2. It builds an **in-memory directed graph** ([NetworkX](https://networkx.org/))—there is no graph database server in this PoC.
+1. `query_graph.load_graph()` reads **`nodes.csv`** and **`edges.csv`** from `data/processed/` **unless** the Neo4j backend is enabled.
+2. The default path builds an **in-memory directed graph** ([NetworkX](https://networkx.org/)). Neo4j is **optional** (compare mode, Aura sync, eval tooling)—not required for the CSV-only workflow.
 3. The loader supports **two CSV shapes**: the **builder** format (`node_id`, `edge_type`, …) and a **Neo4j export** format (`id`, `labels`, `relationship_type`, `start_id`, `end_id`). See `src/graph_query/query_graph.py` for details.
 
 ### 2.2 Investigation flow (planner → judge → synthesis)
@@ -41,9 +43,17 @@ The main page keeps a **lightweight conversational layer** in Streamlit **`sessi
 - **After** a successful investigation, a compact turn record is appended to **`session_turns`** and **`session_active_referents`** is merged from anchors / graph focus (`src/session/memory.py`). The app then **`st.rerun()`** once so the **Session** block (history + **Export session report (HTML)**) reflects the new turn on the same completion—no extra click needed. **Clear session memory** resets turns and referents (and resolver-related keys). Export uses **`build_session_report_html`** (`src/session/report.py`).
 - **Core orchestration is unchanged:** once the question is finalized for the run, execution is still **`run_tool_planner_agent`** → coverage judge → synthesis as in **`src/llm/orchestration.py`**.
 
+##### Optional: Compare NetworkX vs Neo4j (same page)
+
+- In **Investigate**, you can enable **Compare NetworkX vs Neo4j side-by-side**. The app runs the **same** resolved question through **in-memory NetworkX** and **native Neo4j** reads (sequentially) and shows **two columns** with timings and the same outcome-first layout in each.
+- **Session memory does not apply to compare runs:** no new **`session_turns`** row, no referent merge, and the **HTML session report** only reflects **single-backend** investigations. The UI states this when a comparison is shown.
+- Neo4j needs **`NEO4J_*`** (and related) variables in **`.env`** and a graph in sync with your processed CSVs; without it, the Neo4j leg may fail while the NetworkX leg still works.
+
 ##### Main investigation page layout (UI)
 
-Rough **top-to-bottom** order on **`src/app/app.py`**: graph metrics → **Session** (history expanders, HTML export, clear) → **Investigate** (composer in a bordered container) → optional clarify / entity picker → **results** when a run exists. Styling is **`src/app/ui_theme.py`** (scoped to the main column where possible) plus **`.streamlit/config.toml`** for shared light theme tokens.
+Rough **top-to-bottom** order on **`src/app/app.py`**: graph metrics → **Session** (history expanders, HTML export, clear) → **Investigate** (composer in a bordered container, optional **compare** checkbox) → optional clarify / entity picker → **results** when a run exists. Styling is **`src/app/ui_theme.py`** (scoped to the main column where possible) plus **`.streamlit/config.toml`** for shared light theme tokens.
+
+**Other Streamlit pages:** **Full Interactive Graph** (`src/app/pages/1_Full_Interactive_Graph.py`), **Backend comparison** (`2_Backend_Comparison.py`), and **Evals** (`2_Evals.py`) — see sidebar after launch.
 
 **Results** are **outcome-first**: synthesized **Answer** (with optional **Key findings** bullets), **Investigation graph** (pyvis + hop slider), then **Reviewer**, **Tool evaluation**, and **Tool steps** (latter sections mostly collapsed expanders). This ordering is presentation-only; tools and prompts are unchanged.
 
@@ -87,7 +97,8 @@ User question
         → LLM tool-calling loop (Gemini, Anthropic, or Ollama) → query_graph.* (zero or more tool calls per planner phase)
         → Coverage judge on full trace → repeat if needed
         → Synthesis → Streamlit: outcome-first results (answer, graph, then reviewer / tool eval / steps)
-        → Append turn to session_turns; merge session_active_referents; st.rerun() refreshes session UI + export payload
+        → Single-backend only: append turn to session_turns; merge session_active_referents; st.rerun() refreshes session UI + export payload
+        → Compare mode: same planner loop twice (NetworkX + Neo4j); no session_turns update; side-by-side results
 ```
 
 **Full Interactive Graph** (`src/app/pages/1_Full_Interactive_Graph.py`) uses pyvis; the **Node inspector** and sidebar **Focus node** share one focus so choosing a node updates the N-hop subgraph the same as clicking that node in the view. That page is **not** a full UI redesign of the investigation home: it calls **`inject_sidebar_chrome_styles`** + **`inject_secondary_page_layout_reset`** (from `ui_theme.py`) so shared sidebar chrome and global theme apply, while the home page’s **editorial max-width** does not constrain the graph layout.
@@ -106,9 +117,10 @@ User question
 | `data/processed/` | **Graph used at runtime:** `nodes.csv`, `edges.csv` (from the build script or an external export). |
 | `src/synthetic/` | Configurable synthetic data generation + validation tooling. |
 | `src/graph_build/` | Builds graph CSVs from a seed directory (`build_graph_files.py`). |
-| `src/graph_query/` | Loads the graph and runs investigation-style queries; optional **`extension_registry.json`** + **`generated/*.py`** for LLM-authored tools. |
+| `src/graph_query/` | Loads the graph and runs investigation-style queries; optional **`extension_registry.json`** + **`generated/*.py`** for LLM-authored tools; Neo4j/native read helpers for compare and Aura workflows. |
+| `src/graph_store/` | **Neo4j** client helpers and **`sync_processed`** (CSV → Aura) when using the optional graph DB path. |
 | `src/llm/` | **Tool planner** (`tool_agent.py`), **Gemini** / **Anthropic** / **Ollama** clients, **orchestrator** (`orchestration.py`), **prompts** (`prompts.py`), **router** (`router.py`, rule-based routing for optional flows). |
-| `src/app/` | Streamlit UI: **`app.py`** (session resolver + entity resolution + planner → judge → synthesis + summary graph); **`ui_theme.py`** (main-page styling); **`entity_resolution.py`**; **`investigation_graph.py`**; optional **pages** under `src/app/pages/`. |
+| `src/app/` | Streamlit UI: **`app.py`** (session resolver + entity resolution + optional NX/Neo4j compare + planner → judge → synthesis + summary graph); **`ui_theme.py`**; **`entity_resolution.py`**; **`investigation_graph.py`**; **`eval_runner.py`**; **pages** (`1_Full_Interactive_Graph`, `2_Backend_Comparison`, `2_Evals`). |
 | `.streamlit/` | Optional **`config.toml`** for shared Streamlit theme tokens (light cream palette). |
 | `src/session/` | Session-scoped memory: **`context_resolver.py`**, **`memory.py`**, **`report.py`** (HTML export), **`node_id_canonical.py`**. |
 | `tests/` | Smoke tests on processed CSVs (supports builder and Neo4j column layouts). |

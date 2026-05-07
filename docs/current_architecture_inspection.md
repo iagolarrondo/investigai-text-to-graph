@@ -1,6 +1,6 @@
 # Current Repository Inspection (Pre-change)
 
-> **Stale snapshot:** This file described the repo **before** several PoC upgrades (synthetic pipeline, tool-planner investigation UI, **`src/session/`** memory + HTML export). For the **current** Streamlit flow, start with **[README.md](../README.md)** (investigation loop, session memory, entity resolution). Treat the sections below as historical context unless you are diffing against an old revision.
+> **Historical / diffing only:** This file predates the **integrated** home app: **tool planner → judge → synthesis**, **`src/session/`** (rewrite / clarify / HTML export), optional **NetworkX vs Neo4j compare** on the main page, **`env.template`** (tracked) + **`.env`** (local), and extra pages (**Backend comparison**, **Evals**). For **accurate** architecture and setup, use **[README.md](../README.md)** first. The numbered “Actual runtime flow” below is **not** the current primary path (see README §2).
 
 ## Actual runtime flow (from code)
 
