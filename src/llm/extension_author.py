@@ -1,7 +1,7 @@
 """
 LLM-authored **extension tools**: write ``generated/<name>.py``, validate, run pytest smoke, then registry.
 
-Gated by ``INVESTIGATION_EXTENSION_AUTHORING`` (see ``.env.example``).
+Gated by ``INVESTIGATION_EXTENSION_AUTHORING`` (see ``env.template``).
 """
 
 from __future__ import annotations

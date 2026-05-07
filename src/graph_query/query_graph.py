@@ -1,10 +1,18 @@
 """
-Load the prototype graph from CSV and run small queries in memory with NetworkX.
+Load the prototype graph and run small queries in memory with NetworkX.
 
-Reads ``data/processed/nodes.csv`` and ``data/processed/edges.csv`` (from
-``build_graph_files.py``), builds a directed graph, and exposes helpers for
-exploration and **PoC v1 investigation-style** summaries (often as pandas
-DataFrames).
+**Backend** (``GRAPH_BACKEND`` env — see ``env.template``):
+
+- **Default / unset:** read ``data/processed/nodes.csv`` and ``edges.csv`` (from
+  ``build_graph_files.py``).
+- **``neo4j``:** pull ``:Entity`` / ``:GRAPH_EDGE`` from Aura into the same
+  in-memory ``nx.DiGraph`` (after ``python -m src.graph_store.sync_processed``).
+
+Either way, downstream helpers and LLM tools see identical NetworkX semantics.
+
+When ``NEO4J_READ_MODE=native``, investigation helpers listed in ``NATIVE_READ_TOOLS`` run
+**Cypher** against Aura (``neo4j_native_reads`` + ``neo4j_native_heavy``) while tool names stay the same.
+Use :func:`force_networkx_reads` (see ``native_read_mode``) to scan ``_graph`` instead for NX vs Cypher comparisons.
 
 Run from the project root::
 
@@ -23,6 +31,9 @@ from typing import Any
 
 import networkx as nx
 import pandas as pd
+
+from src.graph_query.native_read_mode import neo4j_native_reads_enabled
+from src.graph_query.neo4j_nx_loader import fetch_di_graph_from_neo4j, neo4j_graph_backend_enabled
 
 # Project root: src/graph_query -> src -> repo root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -83,15 +94,8 @@ def _person_address_node(G: nx.DiGraph, person_id: str) -> str | None:
     return None
 
 
-def load_graph() -> nx.DiGraph:
-    """
-    Read the two CSV files and build a directed NetworkX graph.
-
-    Each node carries ``node_type``, ``label``, ``source_table``, ``properties_json``.
-    Each edge carries ``edge_id``, ``edge_type``, ``source_table``, ``properties_json``.
-    """
-    global _graph
-
+def _load_graph_from_csv_files() -> nx.DiGraph:
+    """Build ``nx.DiGraph`` from ``data/processed`` CSVs (original or Neo4j-export columns)."""
     if not NODES_CSV.is_file() or not EDGES_CSV.is_file():
         raise FileNotFoundError(
             f"Missing {NODES_CSV} or {EDGES_CSV}. "
@@ -161,8 +165,41 @@ def load_graph() -> nx.DiGraph:
                 properties_json=row.get("properties_json", "{}"),
             )
 
-    _graph = G
     return G
+
+
+def load_graph() -> nx.DiGraph:
+    """
+    Load a directed NetworkX graph.
+
+    When ``GRAPH_BACKEND=neo4j`` (see ``env.template``), hydrates from Aura
+    ``(:Entity)`` / ``[:GRAPH_EDGE]`` (same attributes as CSV load). Otherwise reads
+    processed CSVs.
+
+    Each node carries ``node_type``, ``label``, ``source_table``, ``properties_json``.
+    Each edge carries ``edge_id``, ``edge_type``, ``source_table``, ``properties_json``.
+    """
+    global _graph
+
+    if neo4j_graph_backend_enabled():
+        try:
+            G = fetch_di_graph_from_neo4j()
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to load graph from Neo4j. Check NEO4J_URI / NEO4J_PASSWORD / "
+                "NEO4J_DATABASE in .env, Aura status, and that you ran "
+                "`python -m src.graph_store.sync_processed`."
+            ) from exc
+        if G.number_of_nodes() == 0:
+            raise RuntimeError(
+                "Neo4j returned no :Entity nodes. Load data with:\n"
+                "  PYTHONPATH=. python -m src.graph_store.sync_processed --clear"
+            )
+        _graph = G
+        return G
+
+    _graph = _load_graph_from_csv_files()
+    return _graph
 
 
 def get_nodes_by_type(node_type: str) -> list[str]:
@@ -179,6 +216,11 @@ def get_neighbors(node_id: str) -> dict[str, list[str]]:
     """
     Directed neighbors: ``outgoing`` (successors) and ``incoming`` (predecessors).
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_reads as nnr
+
+        return nnr.get_neighbors(node_id)
+
     G = _require_graph()
     if node_id not in G:
         raise KeyError(f"Unknown node_id: {node_id!r}")
@@ -204,6 +246,11 @@ def summarize_graph() -> dict:
     """
     Compact summary: node/edge counts and frequency by ``node_type`` / ``edge_type``.
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_reads as nnr
+
+        return nnr.summarize_graph()
+
     G = _require_graph()
 
     node_type_counts: dict[str, int] = {}
@@ -230,11 +277,16 @@ def get_graph_relationship_catalog() -> dict[str, Any]:
     **Schema-level view of the loaded graph:** every distinct directed triple
     ``(from_node_type, edge_type, to_node_type)`` with counts.
 
-    This updates automatically when CSVs change—no code change needed when new
+    This updates automatically when CSVs change or Aura is re-synced—no code change needed when new
     node types or relationships appear. Investigators (and LLM planners) use it
     to see **how** entity types connect in one hop before designing multi-step
     queries or asking for new composite helpers.
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_reads as nnr
+
+        return nnr.get_graph_relationship_catalog()
+
     G = _require_graph()
     key_counts: dict[tuple[str, str, str], int] = {}
     for u, v, data in G.edges(data=True):
@@ -474,6 +526,11 @@ def get_claim_network(claim_node_id: str) -> dict:
     (policy parties), machine ``summary``, plus **``explanation_plain``** and
     **``evidence_bullets``**.
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_heavy as nnh
+
+        return nnh.get_claim_network(claim_node_id)
+
     G = _require_graph()
     if claim_node_id not in G:
         raise KeyError(f"Unknown node_id: {claim_node_id!r}")
@@ -657,6 +714,11 @@ def get_claim_subgraph_summary(claim_node_id: str, max_depth: int = 2) -> dict:
     ``depth_from_claim``), ``edges`` (directed links with both ends in the slice),
     plus ``claim_node_id`` and ``max_depth`` for UI.
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_heavy as nnh
+
+        return nnh.get_claim_subgraph_summary(claim_node_id, max_depth=max_depth)
+
     G = _require_graph()
     if claim_node_id not in G:
         raise KeyError(f"Unknown node_id: {claim_node_id!r}")
@@ -745,6 +807,11 @@ def get_person_subgraph_summary(person_node_id: str, max_depth: int = 2) -> dict
     Use when the question is about “what’s around this **insured** / **party**”
     without starting from a claim.
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_heavy as nnh
+
+        return nnh.get_person_subgraph_summary(person_node_id, max_depth=max_depth)
+
     G = _require_graph()
     if person_node_id not in G:
         raise KeyError(f"Unknown node_id: {person_node_id!r}")
@@ -829,6 +896,11 @@ def get_policy_network(policy_node_id: str) -> dict[str, Any]:
 
     Complements :func:`get_claim_network` (claim-first) and :func:`get_person_policies` (person-first).
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_heavy as nnh
+
+        return nnh.get_policy_network(policy_node_id)
+
     G = _require_graph()
     if policy_node_id not in G:
         raise KeyError(f"Unknown node_id: {policy_node_id!r}")
@@ -925,6 +997,11 @@ def find_shared_bank_accounts() -> dict:
     **Returns:** dict with ``table`` (DataFrame), ``explanation_plain``, and
     ``evidence_bullets`` (``HOLD_BY`` / ``LOCATED_IN`` links used).
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_heavy as nnh
+
+        return nnh.find_shared_bank_accounts()
+
     G = _require_graph()
     rows: list[dict] = []
 
@@ -1029,6 +1106,11 @@ def find_related_people_clusters() -> dict:
     **Returns:** dict with ``table`` (DataFrame), ``explanation_plain``, and
     ``evidence_bullets`` (person–person ties used).
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_heavy as nnh
+
+        return nnh.find_related_people_clusters()
+
     G = _require_graph()
     PERSON_EDGE_TYPES = PERSON_TO_PERSON_RELATIONSHIP_TYPES
 
@@ -1114,6 +1196,11 @@ def find_business_connection_patterns() -> dict:
     **Returns:** dict with ``table`` (DataFrame), ``explanation_plain``, and
     ``evidence_bullets`` (shared-address ``LOCATED_IN`` links).
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_heavy as nnh
+
+        return nnh.find_business_connection_patterns()
+
     G = _require_graph()
     rows: list[dict] = []
 
@@ -1196,6 +1283,11 @@ def search_nodes(
     Optional ``node_type`` filters to a single type (e.g. ``Person``, ``Claim``, ``Policy``).
     Returns a small table for disambiguation before calling more specific tools.
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_reads as nnr
+
+        return nnr.search_nodes(query, node_type=node_type, limit=limit)
+
     G = _require_graph()
     q = (query or "").strip()
     if not q:
@@ -1247,6 +1339,11 @@ def get_person_policies(person_node_id: str) -> dict[str, Any]:
     This answers “what policies is this person tied to?” without starting from a Claim.
     Directed edges follow the CSV: **Person → Policy** for those relationship types.
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_reads as nnr
+
+        return nnr.get_person_policies(person_node_id)
+
     G = _require_graph()
     if person_node_id not in G:
         raise KeyError(f"Unknown node_id: {person_node_id!r}")
@@ -1315,6 +1412,11 @@ def policies_with_related_coparties(person_node_id: str) -> dict[str, Any]:
     This answers questions like: “Is this person on any policy with someone they are
     personally related to?” — without using claims.
     """
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_heavy as nnh
+
+        return nnh.policies_with_related_coparties(person_node_id)
+
     G = _require_graph()
     if person_node_id not in G:
         raise KeyError(f"Unknown node_id: {person_node_id!r}")
@@ -1438,7 +1540,8 @@ def main() -> None:
 
     Each block prints a short **how it works** blurb, then tabular output.
     """
-    print("Loading graph from CSV...")
+    src = "Neo4j (GRAPH_BACKEND)" if neo4j_graph_backend_enabled() else "CSV (data/processed)"
+    print(f"Loading graph from {src}...")
     load_graph()
     G = _require_graph()
     print(f"Loaded {G.number_of_nodes()} nodes, {G.number_of_edges()} edges.")

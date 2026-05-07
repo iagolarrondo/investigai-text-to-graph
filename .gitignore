@@ -14,10 +14,10 @@ build/
 venv/
 env/
 
-# Environment and secrets
+# Environment and secrets (env.template in repo root is a safe placeholder list; keep real keys local)
 .env
 .env.*
-!.env.example
+.env.example
 
 # Jupyter
 .ipynb_checkpoints/

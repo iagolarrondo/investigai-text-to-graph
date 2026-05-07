@@ -25,15 +25,16 @@ from pathlib import Path
 
 import streamlit as st
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-except ImportError:
-    pass
-
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+try:
+    from src.project_env import load_project_dotenv
+
+    load_project_dotenv()
+except ImportError:
+    pass
 
 import streamlit.components.v1 as components  # noqa: E402
 
@@ -54,6 +55,7 @@ from src.app.entity_resolution import (  # noqa: E402
     unresolved_graph_like_id_tokens,
     verified_graph_anchor_spans,
 )
+from src.graph_query.native_read_mode import force_networkx_reads, temporary_neo4j_read_native  # noqa: E402
 from src.graph_query.query_graph import get_graph, load_graph, summarize_graph  # noqa: E402
 from src.llm.tool_agent import ToolAgentResult, run_tool_planner_agent  # noqa: E402
 from src.session.context_resolver import resolve_question_with_session_memory  # noqa: E402
@@ -72,7 +74,7 @@ def _ensure_graph_loaded() -> bool:
     return True
 
 
-def _render_investigation_graph(tr: ToolAgentResult) -> None:
+def _render_investigation_graph(tr: ToolAgentResult, *, key_suffix: str = "") -> None:
     """Single pyvis summary graph from anchors in tool I/O and the answer (no per-step graphs)."""
     anchors = gather_investigation_anchors(tr)
     G = get_graph()
@@ -81,10 +83,11 @@ def _render_investigation_graph(tr: ToolAgentResult) -> None:
         min_value=1,
         max_value=5,
         value=1,
-        key="inv_graph_hop",
+        key=f"inv_graph_hop{key_suffix}",
         help=(
-            "Centers on synthesis graph focus when set, otherwise anchors from the run; "
-            "includes nodes within this many undirected hops. Does not re-run the LLM."
+            "The graph centers on one **focus** node (synthesis focus when set, otherwise anchors from the run), "
+            "then includes every node within this many **undirected** hops on the full link chart. "
+            "Does not re-run the LLM."
         ),
     )
     visible, focus, _mode, edge_filter, slice_hint = compute_summary_visible_nodes(
@@ -92,9 +95,9 @@ def _render_investigation_graph(tr: ToolAgentResult) -> None:
     )
     if not visible:
         st.caption(
-            "No graph anchors matched the loaded graph (no Person-style ids in tool text, "
-            "no raw node_id values from tools, and synthesis graph_focus is missing or invalid). "
-            "Try a question that resolves specific entities, or inspect tool steps below."
+            "No graph anchors matched the loaded graph (no `Person|…`-style ids in tool text, "
+            "no raw `node_id` values from tools, and synthesis **graph_focus** is missing or not a node "
+            "in `nodes.csv`). Run a question that resolves specific entities, or check the tool steps."
         )
         return
     if slice_hint:
@@ -116,7 +119,7 @@ def _render_investigation_graph(tr: ToolAgentResult) -> None:
     components.html(html, height=580, scrolling=False)
 
 
-def _render_tool_planner_result(tr: ToolAgentResult) -> None:
+def _render_tool_planner_result(tr: ToolAgentResult, *, key_suffix: str = "") -> None:
     """Outcome-first: answer and graph, then reviewer, tool evaluation, tool steps."""
     if tr.error:
         st.error(tr.error)
@@ -140,7 +143,7 @@ def _render_tool_planner_result(tr: ToolAgentResult) -> None:
         if getattr(tr, "graph_focus_node_id", None):
             st.caption(f"Synthesis graph focus: `{tr.graph_focus_node_id}`")
         st.markdown("### Investigation graph")
-        _render_investigation_graph(tr)
+        _render_investigation_graph(tr, key_suffix=key_suffix)
 
     st.markdown("### Reviewer")
     if getattr(tr, "judge_rounds", None):
@@ -198,6 +201,51 @@ def _render_session_history(turns: list[dict]) -> None:
             anchors = row.get("anchors") or []
             if anchors:
                 st.caption("Anchors: " + ", ".join(f"`{x}`" for x in anchors[:8]))
+
+
+def _run_with_backend(
+    question: str,
+    backend: str,
+    *,
+    progress_cb: callable | None = None,
+) -> tuple[ToolAgentResult, float]:
+    """Run the full investigation under a specific graph backend.
+
+    ``backend`` is ``"networkx"`` (in-memory NX scan) or ``"neo4j"`` (native Cypher).
+    Returns ``(result, elapsed_seconds)``.
+    """
+    import time as _time
+
+    start = _time.time()
+    if backend == "networkx":
+        with force_networkx_reads():
+            result = run_tool_planner_agent(question, progress_cb=progress_cb)
+    else:
+        with temporary_neo4j_read_native():
+            result = run_tool_planner_agent(question, progress_cb=progress_cb)
+    return result, _time.time() - start
+
+
+def _render_comparison_results(
+    nx_result: ToolAgentResult,
+    neo4j_result: ToolAgentResult,
+    nx_elapsed: float,
+    neo4j_elapsed: float,
+) -> None:
+    """Render NetworkX and Neo4j investigation results side-by-side."""
+    col_nx, col_neo = st.columns(2, gap="large")
+    with col_nx:
+        st.markdown(
+            f"## NetworkX &nbsp;&nbsp; <span style='font-size:0.8em;color:gray;'>⏱ {nx_elapsed:.1f}s</span>",
+            unsafe_allow_html=True,
+        )
+        _render_tool_planner_result(nx_result, key_suffix="_nx")
+    with col_neo:
+        st.markdown(
+            f"## Neo4j Native &nbsp;&nbsp; <span style='font-size:0.8em;color:gray;'>⏱ {neo4j_elapsed:.1f}s</span>",
+            unsafe_allow_html=True,
+        )
+        _render_tool_planner_result(neo4j_result, key_suffix="_neo4j")
 
 
 def main() -> None:
@@ -278,6 +326,15 @@ def main() -> None:
             key="free_text_question",
             label_visibility="collapsed",
             help="The model picks graph tools—search, relationship catalog, claim and person queries, pattern scans.",
+        )
+        st.checkbox(
+            "Compare NetworkX vs Neo4j side-by-side",
+            key="compare_mode_enabled",
+            help=(
+                "Run the same question through both the in-memory NetworkX scan and "
+                "Neo4j native Cypher, then display answers and tool timings side-by-side. "
+                "Comparison runs are not recorded in session memory or the HTML export."
+            ),
         )
         _, run_col = st.columns([5, 1])
         with run_col:
@@ -501,44 +558,114 @@ def main() -> None:
         else:
             _reset_entity_resolution()
 
+    # Snapshot compare-mode at run time so the render block below stays consistent.
+    _compare_mode_active: bool = bool(st.session_state.get("compare_mode_enabled", False))
+
     # If we have a pending (possibly rewritten) question and we're idle, run now.
     if st.session_state.get("er_status") == "idle" and st.session_state.get("er_pending_question"):
         q_to_run = str(st.session_state.get("er_pending_question") or "").strip()
         # Clear pending question immediately to avoid re-running on Streamlit reruns.
         st.session_state["er_pending_question"] = ""
         if q_to_run:
-            try:
-                status = st.empty()
-                recent = st.empty()
-                start = time.time()
-                events: list[str] = []
+            if _compare_mode_active:
+                # ── Compare mode: run NetworkX then Neo4j sequentially ───────────────
+                def _make_progress_cb(label: str, status_el: "st.delta_generator.DeltaGenerator", recent_el: "st.delta_generator.DeltaGenerator") -> callable:  # type: ignore[name-defined]
+                    _phase_start = [time.time()]
+                    _events: list[str] = []
 
-                def _progress_cb(ev: dict) -> None:
-                    et = str(ev.get("type", "")).strip()
-                    msg = str(ev.get("message", "")).strip()
-                    if not msg:
-                        if et == "tool_start":
-                            msg = f"Running tool: `{ev.get('tool')}`…"
-                        elif et == "tool_done":
-                            msg = f"Tool complete: `{ev.get('tool')}`"
-                        else:
-                            msg = et or "Working…"
-                    elapsed = int(time.time() - start)
-                    status.markdown(f"**Working…** {msg}  \n_(elapsed: {elapsed}s)_")
-                    events.append(msg)
-                    tail = events[-6:]
-                    recent.markdown("**Recent activity**\n\n" + "\n".join(f"- {t}" for t in tail))
+                    def _cb(ev: dict) -> None:
+                        et = str(ev.get("type", "")).strip()
+                        msg = str(ev.get("message", "")).strip()
+                        if not msg:
+                            if et == "tool_start":
+                                msg = f"Running tool: `{ev.get('tool')}`…"
+                            elif et == "tool_done":
+                                msg = f"Tool complete: `{ev.get('tool')}`"
+                            else:
+                                msg = et or "Working…"
+                        elapsed = int(time.time() - _phase_start[0])
+                        status_el.markdown(f"**{label}** — {msg}  \n_(elapsed: {elapsed}s)_")
+                        _events.append(msg)
+                        recent_el.markdown(
+                            f"**{label} — recent activity**\n\n"
+                            + "\n".join(f"- {t}" for t in _events[-6:])
+                        )
 
-                with st.spinner("Working…"):
-                    q_planner = append_verified_graph_node_hint(q_to_run, get_graph())
-                    tr = run_tool_planner_agent(q_planner, progress_cb=_progress_cb)
+                    return _cb
+
+                try:
+                    st.info("Running **NetworkX** investigation…")
+                    nx_status = st.empty()
+                    nx_recent = st.empty()
+                    with st.spinner("NetworkX — working…"):
+                        nx_result, nx_elapsed = _run_with_backend(
+                            q_to_run,
+                            "networkx",
+                            progress_cb=_make_progress_cb("NetworkX", nx_status, nx_recent),
+                        )
+                    nx_status.empty()
+                    nx_recent.empty()
+
+                    st.info("Running **Neo4j** investigation…")
+                    neo_status = st.empty()
+                    neo_recent = st.empty()
+                    with st.spinner("Neo4j Native — working…"):
+                        neo4j_result, neo4j_elapsed = _run_with_backend(
+                            q_to_run,
+                            "neo4j",
+                            progress_cb=_make_progress_cb("Neo4j", neo_status, neo_recent),
+                        )
+                    neo_status.empty()
+                    neo_recent.empty()
+
+                    st.session_state["last_compare_run"] = {
+                        "nx_result": nx_result,
+                        "neo4j_result": neo4j_result,
+                        "nx_elapsed": nx_elapsed,
+                        "neo4j_elapsed": neo4j_elapsed,
+                    }
+                    # Clear any previous single-backend result so we only render the comparison.
+                    st.session_state.pop("last_tool_run", None)
+                except Exception as exc:
+                    st.error("Comparison run failed — see details below.")
+                    st.exception(exc)
+            else:
+                # ── Single-backend mode (existing behaviour) ─────────────────────────
+                try:
+                    status = st.empty()
+                    recent = st.empty()
+                    start = time.time()
+                    events: list[str] = []
+
+                    def _progress_cb(ev: dict) -> None:
+                        et = str(ev.get("type", "")).strip()
+                        msg = str(ev.get("message", "")).strip()
+                        if not msg:
+                            if et == "tool_start":
+                                msg = f"Running tool: `{ev.get('tool')}`…"
+                            elif et == "tool_done":
+                                msg = f"Tool complete: `{ev.get('tool')}`"
+                            else:
+                                msg = et or "Working…"
+                        elapsed = int(time.time() - start)
+                        status.markdown(f"**Working…** {msg}  \n_(elapsed: {elapsed}s)_")
+                        events.append(msg)
+                        tail = events[-6:]
+                        recent.markdown("**Recent activity**\n\n" + "\n".join(f"- {t}" for t in tail))
+
+                    with st.spinner("Working…"):
+                        q_planner = append_verified_graph_node_hint(q_to_run, get_graph())
+                        tr = run_tool_planner_agent(q_planner, progress_cb=_progress_cb)
+                    status.empty()
+                    recent.empty()
                     st.session_state["last_tool_run"] = tr
+                    st.session_state.pop("last_compare_run", None)
                     turn_id = len(st.session_state.get("session_turns") or []) + 1
                     user_q = str(st.session_state.get("ctx_pending_question") or q_to_run).strip()
                     turn = build_turn_from_result(
                         turn_id=turn_id,
                         user_question=user_q,
-                        investigation_question=q_to_run,
+                        investigation_question=q_planner,
                         result=tr,
                     )
                     turns = list(st.session_state.get("session_turns") or [])
@@ -549,16 +676,30 @@ def main() -> None:
                         st.session_state.get("session_active_referents"),
                         row.get("active_referents") or {},
                     )
-                # Session history + export are rendered above this block; without a rerun they would
-                # still reflect pre-run state for this script execution. Rerun once so the new turn
-                # appears in history and the download button is built from updated session_turns.
-                st.rerun()
-            except Exception as exc:
-                st.error("Run failed — see details below.")
-                st.exception(exc)
+                    st.rerun()
+                except Exception as exc:
+                    st.error("Run failed — see details below.")
+                    st.exception(exc)
 
+    compare_run = st.session_state.get("last_compare_run")
     last = st.session_state.get("last_tool_run")
-    if last is not None:
+    if compare_run:
+        st.divider()
+        st.markdown(
+            f"**Comparison run** — NetworkX finished in **{compare_run['nx_elapsed']:.1f}s**, "
+            f"Neo4j finished in **{compare_run['neo4j_elapsed']:.1f}s** "
+            f"({compare_run['neo4j_elapsed'] / compare_run['nx_elapsed']:.2f}× relative)."
+            if compare_run["nx_elapsed"] > 0
+            else "**Comparison run complete.**"
+        )
+        st.caption("_Session memory and HTML export only include single-backend runs, not this comparison._")
+        _render_comparison_results(
+            compare_run["nx_result"],
+            compare_run["neo4j_result"],
+            compare_run["nx_elapsed"],
+            compare_run["neo4j_elapsed"],
+        )
+    elif last is not None:
         _render_tool_planner_result(last)
     elif not (question or "").strip():
         st.caption("Enter a question above, then run an investigation to see results here.")
