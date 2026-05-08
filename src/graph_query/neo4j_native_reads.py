@@ -269,6 +269,22 @@ def list_edge_rows_by_type(edge_type: str) -> list[dict[str, Any]]:
     ]
 
 
+def entity_exists(node_id: str) -> bool:
+    """True if an ``:Entity`` with this ``node_id`` exists (single read query)."""
+    nid = (node_id or "").strip()
+    if not nid:
+        return False
+    rows = run_read_query(
+        """
+        MATCH (n:Entity {node_id: $id})
+        RETURN 1 AS ok
+        LIMIT 1
+        """,
+        {"id": nid},
+    )
+    return bool(rows)
+
+
 def claim_node_id_first_match(candidates: list[str]) -> str | None:
     """First candidate (in order) that exists as a Claim node in Neo4j, or ``None``."""
     for cid in candidates:

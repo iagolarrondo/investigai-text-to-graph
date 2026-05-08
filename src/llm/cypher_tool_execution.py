@@ -104,7 +104,6 @@ def _llm_json_for_cypher(user_block: str) -> str:
 
 def _normalize_tool_arguments(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
     """Apply the same id normalizations as ``tool_agent._execute_graph_tool_raw``."""
-    from src.graph_query import query_graph as qg
     from src.llm import tool_agent as ta
 
     inp = dict(tool_input)
@@ -117,11 +116,9 @@ def _normalize_tool_arguments(name: str, tool_input: dict[str, Any]) -> dict[str
     elif name == "get_neighbors":
         nid = str(inp.get("node_id", "")).strip()
         if "|" not in nid and re.search(r"(?i)claim", nid):
-            try:
-                _G = qg.get_graph()
-                if nid not in _G:
-                    nid = ta.normalize_claim_node_id(nid)
-            except RuntimeError:
+            from src.graph_query import neo4j_native_reads as nnr
+
+            if not nnr.entity_exists(nid):
                 nid = ta.normalize_claim_node_id(nid)
         inp["node_id"] = nid
     elif name in ("get_person_policies", "policies_with_related_coparties", "get_person_subgraph_summary"):

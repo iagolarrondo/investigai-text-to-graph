@@ -501,14 +501,20 @@ def _execute_graph_tool_raw(name: str, tool_input: dict[str, Any]) -> str:
 
         if name == "get_neighbors":
             nid = str(tool_input["node_id"]).strip()
-            # Normalize claim-looking ids, but skip if the raw id is already in the graph.
+            # Normalize claim-looking ids, but skip if the raw id is already a graph node_id.
             if "|" not in nid and re.search(r"(?i)claim", nid):
-                try:
-                    _G = qg.get_graph()
-                    if nid not in _G:
+                if neo4j_native_reads_enabled() or neo4j_llm_cypher_reads_enabled():
+                    from src.graph_query import neo4j_native_reads as nnr
+
+                    if not nnr.entity_exists(nid):
                         nid = normalize_claim_node_id(nid)
-                except RuntimeError:
-                    nid = normalize_claim_node_id(nid)
+                else:
+                    try:
+                        _G = qg.get_graph()
+                        if nid not in _G:
+                            nid = normalize_claim_node_id(nid)
+                    except RuntimeError:
+                        nid = normalize_claim_node_id(nid)
             res = qg.get_neighbors(nid)
             return json.dumps(res, indent=2)
 

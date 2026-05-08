@@ -51,6 +51,8 @@ from src.app.entity_resolution import (  # noqa: E402
 )
 from src.graph_query.native_read_mode import (
     force_networkx_reads,
+    neo4j_llm_cypher_reads_enabled,
+    neo4j_native_reads_enabled,
     temporary_neo4j_read_llm_cypher,
     temporary_neo4j_read_native,
 )  # noqa: E402
@@ -486,9 +488,14 @@ and tool *names* are unchanged — only the **implementation** of each step is m
                 st.caption("Resolved question (preview)")
                 st.code(resolved, language=None)
 
-                # Validate that selected node ids exist in the currently loaded graph.
-                G = get_graph()
-                invalid = sorted({v for v in picks.values() if v and v not in G})
+                # Validate that selected node ids exist (Neo4j when native/LLM Cypher reads; else in-memory graph).
+                if neo4j_native_reads_enabled() or neo4j_llm_cypher_reads_enabled():
+                    from src.graph_query import neo4j_native_reads as nnr
+
+                    invalid = sorted({v for v in picks.values() if v and not nnr.entity_exists(v)})
+                else:
+                    G = get_graph()
+                    invalid = sorted({v for v in picks.values() if v and v not in G})
                 if invalid:
                     st.error(
                         "One or more selected node ids are not in the loaded graph. "

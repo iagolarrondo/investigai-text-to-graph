@@ -8,7 +8,9 @@ Whether investigation reads hit **Neo4j with Cypher** vs scanning **NetworkX**.
    ``neo4j_native_reads`` / ``neo4j_native_heavy`` (hand-written Cypher).
 3. **`NEO4J_READ_MODE=llm_cypher`** — same tool names, but ``tool_agent`` asks the **investigation LLM**
    to emit read-only Cypher per call; no changes inside ``query_graph`` dispatch.
-4. Tools not listed still call ``_require_graph()`` (CSV or Aura hydrate).
+4. With **native** or **llm_cypher**, investigation **tool execution** does not use NetworkX scans
+   (Cypher / LLM Cypher only). ``load_graph()`` / ``get_graph()`` may still be used for **UI**
+   (e.g. pyvis) on the CSV- or Aura-hydrated in-memory graph — not for those tool reads.
 5. Recommended: ``NEO4J_READ_MODE=native`` or ``llm_cypher`` + leave ``GRAPH_BACKEND`` unset so ``load_graph()`` uses **CSV**
    for pyvis and unported tools, while Aura stays the investigation read path for ported tools.
    Keep CSV and Aura in sync (``sync_processed``).
