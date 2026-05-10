@@ -14,7 +14,9 @@ from __future__ import annotations
 import random
 import sys
 import time
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -36,8 +38,36 @@ from src.app.eval_runner import (  # noqa: E402
     score_answer,
     score_answer_llm,
 )
+from src.graph_query.native_read_mode import (  # noqa: E402
+    force_networkx_reads,
+    temporary_neo4j_read_llm_cypher,
+    temporary_neo4j_read_native,
+)
 from src.graph_query.query_graph import get_graph, load_graph  # noqa: E402
 from src.llm.tool_agent import run_tool_planner_agent  # noqa: E402
+
+
+_BACKEND_CHOICES: dict[str, list[tuple[str, str]]] = {
+    "Current/default": [("default", "Current/default")],
+    "NetworkX": [("networkx", "NetworkX")],
+    "Neo4j native": [("neo4j_native", "Neo4j native")],
+    "LLM Cypher": [("llm_cypher", "LLM Cypher")],
+    "All three": [
+        ("networkx", "NetworkX"),
+        ("neo4j_native", "Neo4j native"),
+        ("llm_cypher", "LLM Cypher"),
+    ],
+}
+
+
+def _backend_context(backend_id: str) -> AbstractContextManager[Any]:
+    if backend_id == "networkx":
+        return force_networkx_reads()
+    if backend_id == "neo4j_native":
+        return temporary_neo4j_read_native()
+    if backend_id == "llm_cypher":
+        return temporary_neo4j_read_llm_cypher()
+    return nullcontext()
 
 
 def _ensure_graph_loaded() -> None:
@@ -173,6 +203,17 @@ with c4:
 with c5:
     seed = st.number_input("Seed", value=42, step=1, help="For reproducible random sampling.")
 
+backend_mode = st.selectbox(
+    "Graph backend(s)",
+    options=list(_BACKEND_CHOICES.keys()),
+    index=0,
+    help=(
+        "Choose one execution path, or run each selected eval against NetworkX, "
+        "Neo4j native Cypher, and LLM-authored Cypher."
+    ),
+)
+selected_backends = _BACKEND_CHOICES[backend_mode]
+
 use_llm_judge = st.checkbox(
     "Use LLM judge for scoring",
     value=True,
@@ -188,14 +229,15 @@ use_llm_judge = st.checkbox(
 projected_total = sum(
     min(int(tests_per_template), sum(1 for r in pool if r.qid == q)) for q in qids_in_pool
 )
+projected_runs = projected_total * len(selected_backends)
 st.caption(
-    f"**Projected: {projected_total} total tests** — "
-    f"{int(tests_per_template)} × {len(qids_in_pool)} template(s)."
+    f"**Projected: {projected_runs} total run(s)** — "
+    f"{projected_total} eval(s) × {len(selected_backends)} backend(s)."
 )
 
-if projected_total > 25:
+if projected_runs > 25:
     st.warning(
-        f"⚠️ You're about to run **{projected_total}** LLM investigations. This will take "
+        f"⚠️ You're about to run **{projected_runs}** LLM investigations. This will take "
         "minutes and incur API cost. Consider starting smaller to sanity-check."
     )
 
@@ -229,51 +271,61 @@ run_btn = st.button("Run evals", type="primary", key="run_evals_btn", disabled=n
 
 if run_btn:
     sample = _select_sample(pool, qids_in_pool, int(tests_per_template), strategy, int(seed))
-    progress = st.progress(0.0, text=f"Running 0 / {len(sample)}…")
+    total_runs = len(sample) * len(selected_backends)
+    progress = st.progress(0.0, text=f"Running 0 / {total_runs}…")
     status = st.empty()
     results: list[dict] = []
     overall_start = time.time()
+    completed_runs = 0
 
     for i, r in enumerate(sample, start=1):
-        status.markdown(
-            f"**Test {i}/{len(sample)}** — `{r.qid}` on `{r.claim_number}`  \n"
-            f"_{r.question_text[:140]}{'…' if len(r.question_text) > 140 else ''}_"
-        )
-        t0 = time.time()
-        actual_text = ""
-        error_msg = ""
-        try:
-            tr = run_tool_planner_agent(r.question_text)
-            actual_text = (tr.final_text or "").strip()
-            if tr.error and not actual_text:
-                error_msg = tr.error
-        except Exception as exc:  # noqa: BLE001
-            error_msg = f"{type(exc).__name__}: {exc}"
-        elapsed = time.time() - t0
-
-        if use_llm_judge:
-            sr = score_answer_llm(
-                r.question_text, r.expected_answer_type, r.expected_answer, actual_text
+        for backend_id, backend_label in selected_backends:
+            status.markdown(
+                f"**Test {i}/{len(sample)}** — `{r.qid}` on `{r.claim_number}` via **{backend_label}**  \n"
+                f"_{r.question_text[:140]}{'…' if len(r.question_text) > 140 else ''}_"
             )
-        else:
-            sr = score_answer(r.expected_answer, r.expected_answer_type, actual_text)
-        results.append(
-            {
-                "qid": r.qid,
-                "bucket": f"{r.bucket_idx}. {r.bucket_title}",
-                "claim": r.claim_number,
-                "question": r.question_text,
-                "expected_type": r.expected_answer_type,
-                "expected": r.expected_answer,
-                "actual": actual_text,
-                "passed": sr.passed,
-                "score": sr.score,
-                "detail": sr.detail,
-                "elapsed_s": round(elapsed, 1),
-                "error": error_msg,
-            }
-        )
-        progress.progress(i / len(sample), text=f"Running {i} / {len(sample)}…")
+            t0 = time.time()
+            actual_text = ""
+            error_msg = ""
+            try:
+                with _backend_context(backend_id):
+                    tr = run_tool_planner_agent(r.question_text)
+                actual_text = (tr.final_text or "").strip()
+                if tr.error and not actual_text:
+                    error_msg = tr.error
+            except Exception as exc:  # noqa: BLE001
+                error_msg = f"{type(exc).__name__}: {exc}"
+            elapsed = time.time() - t0
+
+            if use_llm_judge:
+                sr = score_answer_llm(
+                    r.question_text, r.expected_answer_type, r.expected_answer, actual_text
+                )
+            else:
+                sr = score_answer(r.expected_answer, r.expected_answer_type, actual_text)
+            results.append(
+                {
+                    "qid": r.qid,
+                    "bucket": f"{r.bucket_idx}. {r.bucket_title}",
+                    "claim": r.claim_number,
+                    "backend": backend_label,
+                    "backend_id": backend_id,
+                    "question": r.question_text,
+                    "expected_type": r.expected_answer_type,
+                    "expected": r.expected_answer,
+                    "actual": actual_text,
+                    "passed": sr.passed,
+                    "score": sr.score,
+                    "detail": sr.detail,
+                    "elapsed_s": round(elapsed, 1),
+                    "error": error_msg,
+                }
+            )
+            completed_runs += 1
+            progress.progress(
+                completed_runs / max(total_runs, 1),
+                text=f"Running {completed_runs} / {total_runs}…",
+            )
 
     overall_elapsed = time.time() - overall_start
     progress.empty()
@@ -288,16 +340,33 @@ if results:
     st.subheader("Results")
 
     df = pd.DataFrame(results)
+    if "backend" not in df.columns:
+        df["backend"] = "Current/default"
     n = len(df)
     n_pass = int(df["passed"].sum())
     n_fail = n - n_pass
     overall_elapsed = st.session_state.get("eval_elapsed_s", 0.0)
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Tests run", n)
+    m1.metric("Runs", n)
     m2.metric("Passed", n_pass)
     m3.metric("Failed", n_fail)
     m4.metric("Total time", f"{overall_elapsed:.0f}s")
+
+    if "backend" in df.columns and df["backend"].nunique() > 1:
+        st.markdown("**Pass rate by backend**")
+        backend_agg = (
+            df.groupby("backend")
+            .agg(runs=("passed", "size"), passed=("passed", "sum"), avg_time_s=("elapsed_s", "mean"))
+            .reset_index()
+        )
+        backend_agg["pass_rate"] = (backend_agg["passed"] / backend_agg["runs"]).map(lambda v: f"{v*100:.0f}%")
+        st.dataframe(
+            backend_agg,
+            hide_index=True,
+            width=1200,
+            column_config={"avg_time_s": st.column_config.NumberColumn("avg time (s)", format="%.1f")},
+        )
 
     # Per-bucket pass rate.
     if "bucket" in df.columns and df["bucket"].notna().any():
@@ -308,18 +377,30 @@ if results:
             .reset_index()
         )
         agg["pass_rate"] = (agg["passed"] / agg["tests"]).map(lambda v: f"{v*100:.0f}%")
-        st.dataframe(agg, hide_index=True, width="stretch")
+        st.dataframe(agg, hide_index=True, width=1200)
 
     st.markdown("**Per-test results**")
     table_df = df[
-        ["qid", "bucket", "claim", "passed", "score", "elapsed_s", "expected_type", "expected", "actual", "detail"]
+        [
+            "qid",
+            "bucket",
+            "claim",
+            "backend",
+            "passed",
+            "score",
+            "elapsed_s",
+            "expected_type",
+            "expected",
+            "actual",
+            "detail",
+        ]
     ].copy()
     table_df["actual"] = table_df["actual"].str.slice(0, 240)
     table_df["expected"] = table_df["expected"].str.slice(0, 240)
     st.dataframe(
         table_df,
         hide_index=True,
-        width="stretch",
+        width=1200,
         column_config={
             "passed": st.column_config.CheckboxColumn("pass"),
             "score": st.column_config.NumberColumn("score", format="%.2f"),
@@ -332,13 +413,17 @@ if results:
     pick = st.selectbox(
         "Select a test to expand",
         options=options,
-        format_func=lambda i: f"{results[i]['qid']} · {results[i]['claim']} · "
-        f"{'PASS' if results[i]['passed'] else 'FAIL'}",
+        format_func=lambda i: (
+            f"{results[i]['qid']} · {results[i]['claim']} · "
+            f"{results[i].get('backend', 'Current/default')} · "
+            f"{'PASS' if results[i]['passed'] else 'FAIL'}"
+        ),
     )
     if pick is not None:
         r = results[pick]
         st.markdown(f"**Question:** {r['question']}")
         st.markdown(f"**Bucket:** {r['bucket']}")
+        st.markdown(f"**Backend:** {r.get('backend', 'Current/default')}")
         st.markdown(f"**Expected ({r['expected_type']}):**")
         st.code(r["expected"] or "(empty)", language="json" if r["expected_type"] in ("list", "object") else None)
         st.markdown("**Actual answer:**")
