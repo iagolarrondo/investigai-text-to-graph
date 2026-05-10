@@ -521,3 +521,35 @@ SYSTEM_TOOL_EXTENSION_AUTHOR_OLLAMA = (
     + "\n\n**Critical:** Reply with **only** one JSON object. Keys exactly: "
     "\"tool_name\", \"description\", \"input_schema\", \"function_body\" (string with Python lines for inside run()).\n"
 )
+
+# ── Native Neo4j port for a freshly authored extension (generated/n → native_ext_generated/n) ─
+
+_SYSTEM_NATIVE_EXTENSION_AUTHOR_CORE = """You write a **Neo4j Aura / Cypher** implementation of an InvestigAI **extension** tool.
+
+**Graph model (synced CSV export):**
+- Nodes: ``(:Entity {node_id, node_type, label, source_table, properties_json})``
+- Relationships: ``(:Entity)-[r:GRAPH_EDGE {edge_id, edge_type, source_table, properties_json}]->(:Entity)``
+- Common ``edge_type`` values include ``IS_CLAIM_AGAINST_POLICY``, ``IS_COVERED_BY``, ``SOLD_POLICY``, ``HOLD_BY``, ``LOCATED_IN``, etc.
+
+**Allowed imports only:**
+- ``from src.graph_store.neo4j_read_session import run_read_query`` (alias ``rq`` recommended)
+- ``from src.graph_query.neo4j_native_reads import parse_properties_json`` (optional)
+- Standard library: ``json``, ``typing``, ``collections``, ``itertools``, ``re``, ``math``, ``functools``, ``operator``, ``datetime``, ``decimal``
+
+**Forbidden:** ``networkx``, ``query_graph``, ``get_graph``, graph traversal in Python over edges (use Cypher). No files, subprocess, eval, exec, open.
+
+**Output: valid JSON only** with one key:
+- ``module_source`` (string): a **complete** Python module — must define::
+
+    def run_native(tool_input: dict[str, Any]) -> str:
+
+  that returns a **string** (typically ``json.dumps(...)``) matching the extension's contract. Use ``rq("MATCH ...", {"param": value})`` for reads; keep result sets bounded (``LIMIT``). Mirror the semantics of the reference NetworkX body in the user message.
+
+Start ``module_source`` with a module docstring and ``from __future__ import annotations``."""
+
+SYSTEM_NATIVE_EXTENSION_AUTHOR = _SYSTEM_NATIVE_EXTENSION_AUTHOR_CORE.strip()
+
+SYSTEM_NATIVE_EXTENSION_AUTHOR_OLLAMA = (
+    _SYSTEM_NATIVE_EXTENSION_AUTHOR_CORE.strip()
+    + '\n\n**Critical:** Reply with **only** one JSON object. Key exactly: "module_source" (string).\n'
+)

@@ -12,6 +12,9 @@ Either way, downstream helpers and LLM tools see identical NetworkX semantics.
 
 When ``NEO4J_READ_MODE=native``, investigation helpers listed in ``NATIVE_READ_TOOLS`` run
 **Cypher** against Aura (``neo4j_native_reads`` + ``neo4j_native_heavy``) while tool names stay the same.
+When ``NEO4J_READ_MODE=llm_cypher``, the same tool names are handled in ``tool_agent`` via
+``cypher_tool_execution`` (investigation LLM → read-only Cypher) and these functions stay on the NetworkX path
+when a graph is loaded.
 Use :func:`force_networkx_reads` (see ``native_read_mode``) to scan ``_graph`` instead for NX vs Cypher comparisons.
 
 Run from the project root::
@@ -204,6 +207,11 @@ def load_graph() -> nx.DiGraph:
 
 def get_nodes_by_type(node_type: str) -> list[str]:
     """Return every ``node_id`` whose ``node_type`` matches (exact string)."""
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_reads as nnr
+
+        return nnr.list_node_ids_by_type(node_type)
+
     G = _require_graph()
     out: list[str] = []
     for nid, data in G.nodes(data=True):
@@ -232,6 +240,11 @@ def get_neighbors(node_id: str) -> dict[str, list[str]]:
 
 def get_edges_by_type(edge_type: str) -> list[dict]:
     """All edges with the given ``edge_type``, as dicts including source/target."""
+    if neo4j_native_reads_enabled():
+        from src.graph_query import neo4j_native_reads as nnr
+
+        return nnr.list_edge_rows_by_type(edge_type)
+
     G = _require_graph()
     matches: list[dict] = []
     for u, v, data in G.edges(data=True):

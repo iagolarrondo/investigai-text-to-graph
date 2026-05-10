@@ -20,6 +20,7 @@ from src.project_env import load_project_dotenv
 
 load_project_dotenv()
 
+from src.graph_query.native_read_mode import neo4j_llm_cypher_reads_enabled, neo4j_native_reads_enabled
 from src.graph_query.query_graph import get_graph
 from src.llm.json_extract import extract_json_object
 from src.llm.prompts import (
@@ -126,6 +127,10 @@ def _normalize_focus_node_id(raw: object) -> str | None:
     s = str(raw).strip()
     if not s or s.lower() == "null":
         return None
+    if neo4j_native_reads_enabled() or neo4j_llm_cypher_reads_enabled():
+        from src.graph_query import neo4j_native_reads as nnr
+
+        return s if nnr.entity_exists(s) else None
     try:
         G = get_graph()
     except RuntimeError:

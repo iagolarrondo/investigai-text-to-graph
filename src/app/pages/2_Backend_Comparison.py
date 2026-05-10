@@ -30,7 +30,13 @@ except ImportError:
     pass
 
 from src.graph_query.backend_compare import ComparisonBatchResult, QUERY_RUNNERS, run_comparison_batch
-from src.graph_query.nl_backend_compare import NlDualCompareResult, run_nl_dual_hydrate, run_nl_dual_nx_vs_cypher
+from src.graph_query.nl_backend_compare import (
+    NlDualCompareResult,
+    NlTripleCompareResult,
+    run_nl_dual_hydrate,
+    run_nl_dual_nx_vs_cypher,
+    run_nl_triple_nx_native_llm_cypher,
+)
 from src.graph_query.nx_native_compare import (
     NX_NATIVE_QUERY_RUNNERS,
     NxNativeComparisonBatchResult,
@@ -44,7 +50,11 @@ _BC_NL_LAST = "_bc_last_nl_comparison"
 
 
 def _mode_slug(m: str) -> str:
-    return "hydrate" if m.startswith("Hydrate") else "nx_native"
+    if m.startswith("Hydrate"):
+        return "hydrate"
+    if "LLM-authored" in m:
+        return "nx_native_llm"
+    return "nx_native"
 
 
 def _pretty_json(obj) -> str:
@@ -78,6 +88,61 @@ def _render_query_outputs(batch: ComparisonBatchResult | NxNativeComparisonBatch
             st.code(_pretty_json(left_obj), language="json")
         with cj2:
             st.code(_pretty_json(right_obj), language="json")
+
+
+def _render_nl_outputs_triple(res: NlTripleCompareResult) -> None:
+    st.subheader("NL investigation — three-way")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("NetworkX scan (s)", f"{res.networkx_ms / 1000:.1f}")
+    m2.metric("Neo4j native Cypher (s)", f"{res.neo4j_native_ms / 1000:.1f}")
+    m3.metric("LLM-authored Cypher (s)", f"{res.llm_cypher_ms / 1000:.1f}")
+    all_yes = res.match_nx_native and res.match_native_llm and res.match_nx_llm
+    m4.metric("All traces match*", "yes" if all_yes else "no")
+    st.caption(
+        "*Normalized structural diff of traces — **not** semantic equality of answers. "
+        "Three separate planner runs; the LLM Cypher arm also adds one LLM **per tool** for query synthesis."
+    )
+    if res.mismatch_detail:
+        with st.expander("Normalized diff detail (pairwise)"):
+            st.code(res.mismatch_detail)
+    st.caption("Compare **final answers** and per-step tool outputs below.")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("### NetworkX scan")
+        if res.networkx.error:
+            st.error(res.networkx.error)
+        st.markdown(res.networkx.final_text or "_(empty)_")
+    with c2:
+        st.markdown("### Neo4j native Cypher")
+        if res.neo4j_native.error:
+            st.error(res.neo4j_native.error)
+        st.markdown(res.neo4j_native.final_text or "_(empty)_")
+    with c3:
+        st.markdown("### LLM-authored Cypher")
+        if res.llm_cypher.error:
+            st.error(res.llm_cypher.error)
+        st.markdown(res.llm_cypher.final_text or "_(empty)_")
+    with st.expander("Tool steps — NetworkX"):
+        st.json(
+            [
+                {"tool": s.tool, "input": s.input, "phase": s.planner_phase, "preview": s.result_preview[:2000]}
+                for s in res.networkx.steps
+            ]
+        )
+    with st.expander("Tool steps — native Cypher"):
+        st.json(
+            [
+                {"tool": s.tool, "input": s.input, "phase": s.planner_phase, "preview": s.result_preview[:2000]}
+                for s in res.neo4j_native.steps
+            ]
+        )
+    with st.expander("Tool steps — LLM Cypher"):
+        st.json(
+            [
+                {"tool": s.tool, "input": s.input, "phase": s.planner_phase, "preview": s.result_preview[:2000]}
+                for s in res.llm_cypher.steps
+            ]
+        )
 
 
 def _render_nl_outputs(res: NlDualCompareResult) -> None:
@@ -122,28 +187,60 @@ def _render_nl_outputs(res: NlDualCompareResult) -> None:
 st.set_page_config(page_title="Backend comparison — InvestigAI", layout="wide", page_icon="⚖️")
 st.title("⚖️ Backend comparison")
 st.caption(
-    "Named probes: deterministic ``query_graph`` calls. NL: full planner → judge → synthesis **twice** "
-    "(costs two investigations). **Use the sidebar** to run — buttons stay visible when you scroll."
+    "Named probes: deterministic ``query_graph`` calls. NL: full planner → judge → synthesis — **two** or **three** "
+    "full runs depending on mode. **Use the sidebar** to run — buttons stay visible when you scroll."
 )
 
 screen = st.radio(
     "What to compare",
-    ("Named probes (deterministic)", "NL investigation (LLM × 2)"),
+    ("Named probes (deterministic)", "NL investigation (planner + judge + synthesis)"),
     horizontal=True,
     key="bc_screen",
 )
 
 compare_mode = st.radio(
     "Comparison mode",
-    ("Hydrate: CSV vs Neo4j → NetworkX", "Execution: NetworkX scan vs Neo4j Cypher"),
+    (
+        "Hydrate: CSV vs Neo4j → NetworkX",
+        "Execution: NetworkX scan vs Neo4j Cypher",
+        "Execution: NX vs native Cypher vs LLM-authored Cypher",
+    ),
     horizontal=True,
     help="Applies to **Named probes** and **NL investigation**.",
     key="bc_compare_mode",
 )
 
+bc_force_three_nl = st.toggle(
+    "Quick: always run all three for NL (NX · native · LLM Cypher)",
+    value=False,
+    key="bc_force_three_nl",
+    help=(
+        "When **NL investigation** is selected and mode is not *Hydrate*, runs three full investigations even if you "
+        "picked the two-way execution option above. (Same workload as choosing the third comparison mode.)"
+    ),
+)
+
+with st.expander("How the three graph architectures differ", expanded=False):
+    st.markdown(
+        """
+**Shared** — Same tool planner → judge → synthesis; the model picks the same named tools.
+
+**NetworkX** — Python + in-memory `networkx` graph (CSV or hydrated).
+
+**Neo4j native** — Hand-written Cypher in `neo4j_native_*` against Aura.
+
+**LLM Cypher** — Each tool call is implemented by the investigation LLM outputting validated read-only Cypher + parameters, then executed on Aura.
+        """.strip()
+    )
+
 if compare_mode.startswith("Hydrate"):
     st.markdown(
         "**Hydrate:** same logic on **CSV → NetworkX** vs **Neo4j → NetworkX** (both scan in-memory graphs)."
+    )
+elif "LLM-authored" in compare_mode:
+    st.markdown(
+        "**Three-way execution:** one CSV graph for pyvis — **NetworkX** scans memory, **native** uses "
+        "hand-written Cypher helpers, **LLM Cypher** asks the investigation model for read-only Cypher **per tool**."
     )
 else:
     st.markdown(
@@ -340,6 +437,11 @@ if do_probes:
             st.session_state.pop(_BC_NL_LAST, None)
     else:
         cached_g = st.session_state.get(_BC_NX_KEY) if keep_cache else None
+        if "LLM-authored" in compare_mode:
+            st.info(
+                "**Named probes** stay a **two-way** NX vs native check. The third arm (LLM-authored Cypher) "
+                "runs only with **NL investigation**, where the planner picks tools."
+            )
         try:
             with st.spinner("Loading CSV graph and running NX vs Cypher …"):
                 batch = run_nx_vs_native_batch(
@@ -415,6 +517,15 @@ if do_nl:
                     a3.metric("Neo4j / CSV hydrate", f"{h2 / h1:.2f}×" if h1 > 0 else "—")
                 if keep_cache and nl_res.cached_graph_pair is not None:
                     st.session_state[_BC_KEY] = nl_res.cached_graph_pair
+            elif "LLM-authored" in compare_mode or (
+                bool(st.session_state.get("bc_force_three_nl", False)) and not compare_mode.startswith("Hydrate")
+            ):
+                with st.spinner("NL compare: three investigations — NX, native Cypher, LLM-authored Cypher …"):
+                    nl_res, hcsv = run_nl_triple_nx_native_llm_cypher(q, max_rounds=max_r, cached_graph=cached_g)
+                if hcsv is not None:
+                    st.metric("Load CSV graph (ms)", f"{hcsv:,.0f}")
+                if keep_cache and nl_res.cached_graph_csv is not None:
+                    st.session_state[_BC_NX_KEY] = nl_res.cached_graph_csv
             else:
                 with st.spinner("NL compare: NX scan vs native Cypher (two full investigations) …"):
                     nl_res, hcsv = run_nl_dual_nx_vs_cypher(q, max_rounds=max_r, cached_graph=cached_g)
@@ -430,7 +541,11 @@ if do_nl:
             st.error(str(exc))
         else:
             if nl_res is not None:
-                st.session_state[_BC_NL_LAST] = (_mode_slug(compare_mode), nl_res)
+                if isinstance(nl_res, NlTripleCompareResult):
+                    vslug = "nx_native_llm"
+                else:
+                    vslug = _mode_slug(compare_mode)
+                st.session_state[_BC_NL_LAST] = (vslug, nl_res)
                 st.session_state.pop(_BC_LAST, None)
 
 _last = st.session_state.get(_BC_LAST)
@@ -442,5 +557,15 @@ if _last is not None and screen.startswith("Named"):
 _nl = st.session_state.get(_BC_NL_LAST)
 if _nl is not None and screen.startswith("NL"):
     variant_nl, nl_obj = _nl
-    if variant_nl == _mode_slug(compare_mode):
-        _render_nl_outputs(nl_obj)
+    slug_now = _mode_slug(compare_mode)
+    triple_context = "LLM-authored" in compare_mode or (
+        bool(st.session_state.get("bc_force_three_nl", False)) and not compare_mode.startswith("Hydrate")
+    )
+    nl_visible = variant_nl == slug_now or (
+        isinstance(nl_obj, NlTripleCompareResult) and triple_context and variant_nl == "nx_native_llm"
+    )
+    if nl_visible:
+        if isinstance(nl_obj, NlTripleCompareResult):
+            _render_nl_outputs_triple(nl_obj)
+        else:
+            _render_nl_outputs(nl_obj)

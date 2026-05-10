@@ -87,5 +87,173 @@
     },
     "active": true,
     "created_at": "2026-04-30T20:35:31.923800+00:00"
+  },
+  {
+    "name": "get_claimant_spouse_policies_and_claims",
+    "module": "get_claimant_spouse_policies_and_claims",
+    "description": "Given a claim_id, identifies the claimant Person node, finds any spouse (via SPOUSE_OF or similar person-person edges), then returns the spouse's policies and any claims linked to them. Answers questions like 'does the claimant on claim X have a spouse, and do they hold policies or have claims?' in a single call instead of 3-4 chained tool calls.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The claim node ID or label, e.g. CLM-2025-10031"
+        },
+        "spouse_edge_keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Edge type substrings to treat as spouse relationships (case-insensitive). Defaults to ['spouse', 'married', 'partner']."
+        },
+        "hops": {
+          "type": "integer",
+          "description": "Hop depth when scanning for spouse node (default 1).",
+          "default": 1
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-10T14:53:36.348702+00:00"
+  },
+  {
+    "name": "get_care_sessions_by_distance_from_insured",
+    "module": "get_care_sessions_by_distance_from_insured",
+    "description": "Given a claim_id, finds the insured Person node linked to that claim, retrieves their address coordinates/location, then finds all CareSession nodes linked to the claim and retrieves each session's check-out location. Ranks sessions by geographic distance (Haversine if lat/lon available, else falls back to string comparison) from the insured's address and returns the furthest session along with all sessions ranked by distance. Use when the question asks which care session check-out location is furthest from the insured's address for a given claim.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The claim node_id or label (e.g. CLM-2025-10195) to look up care sessions for."
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-10T15:41:15.143847+00:00"
+  },
+  {
+    "name": "get_care_session_device_mismatch",
+    "module": "get_care_session_device_mismatch",
+    "description": "For a given claim_id, traverses to all linked CareSession nodes and compares the check-in device vs check-out device for each session. Returns sessions where the two devices differ, along with all session device data. Use when the question asks whether check-in and check-out devices differ across care sessions for a specific claim.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The claim node_id or label (e.g. 'CLM-2024-10108') to anchor the search."
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-10T15:51:06.052682+00:00"
+  },
+  {
+    "name": "get_claim_provider_service_dates",
+    "module": "get_claim_provider_service_dates",
+    "description": "Given a claim_id, traverses edges from the Claim node to any HealthcareProvider (or similar provider) nodes and returns each provider's id, label, and any service start/end date properties found on those edges or the provider nodes themselves. Use when the question asks when each provider began and ended their service on a specific claim.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The claim node_id or label (e.g. CLM-2025-10192) to look up provider service dates for."
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-10T16:57:10.652536+00:00"
+  },
+  {
+    "name": "get_care_sessions_exceeding_distance_threshold",
+    "module": "get_care_sessions_exceeding_distance_threshold",
+    "description": "Given a claim_id and a distance_threshold_miles (default 5.0), finds all CareSession nodes linked to the claim, retrieves their ping/check-out location coordinates, and returns only sessions where the distance from the insured's address exceeds the threshold. Returns each flagged session's id, label, distance_miles, and location data. Use when the question asks whether any care session pings/locations occurred more than N miles from the policyholder's address for a specific claim.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The node_id or label of the Claim node (e.g. CLM-2025-10048)."
+        },
+        "distance_threshold_miles": {
+          "type": "number",
+          "description": "Distance threshold in miles. Sessions exceeding this distance are flagged. Defaults to 5.0."
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-10T18:08:31.186425+00:00"
+  },
+  {
+    "name": "get_claimant_assessment_scores",
+    "module": "get_claimant_assessment_scores",
+    "description": "Given a claim_id, resolves the claimant Person node from the claim, traverses all adjacent assessment/review/medical-record node types, and collects any property whose key contains 'mmse', 'cognitive', 'score', 'assessment', or 'test'. Returns a structured response with the claimant node, all assessment/review nodes found, and the relevant score properties. Use when the question asks for MMSE, cognitive scores, or clinical assessment values for a claimant on a specific claim.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The claim node id or label (e.g. CLM-2024-10007)"
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-10T18:11:43.903690+00:00"
+  },
+  {
+    "name": "get_claim_payment_bank_accounts",
+    "module": "get_claim_payment_bank_accounts",
+    "description": "Given a claim_id, traverses the graph from the Claim node → Payment nodes → BankAccount nodes and returns all bank accounts associated with payments on that claim. Use when the question asks which bank accounts are linked to payments on a specific claim.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The claim node id or label (e.g. CLM-2025-10165). A substring search is performed if an exact match is not found."
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-10T18:19:05.240237+00:00"
+  },
+  {
+    "name": "get_claim_remediation",
+    "module": "get_claim_remediation",
+    "description": "Given a claim_id, traverses the graph from the Claim node to any Remediation, Recovery, or Resolution-type nodes and returns their properties (status, recovery_amount, date, type, etc.). Use when the question asks whether a claim has been remediated, what the recovery amount is, or details about resolution/recovery actions linked to a specific claim.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The exact node_id of the claim (e.g. CLM-2023-10202)."
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-10T18:23:32.835124+00:00"
   }
 ]

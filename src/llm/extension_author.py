@@ -63,7 +63,14 @@ from src.graph_query.query_graph import get_graph
 
 def run(tool_input: dict[str, Any]) -> str:
     """Registry entrypoint; return JSON or plain text for the planner."""
-{body}
+    from src.graph_query.native_read_mode import neo4j_native_reads_enabled
+
+    if neo4j_native_reads_enabled():
+        from src.graph_query.neo4j_native_extensions import run_extension_native
+
+        return run_extension_native("__TOOL_NAME__", tool_input)
+
+__BODY__
 '''
 
 
@@ -103,6 +110,11 @@ def _validate_extension_source(src: str) -> str | None:
         elif isinstance(node, ast.ImportFrom):
             mod = node.module or ""
             if mod == "src.graph_query.query_graph":
+                continue
+            if mod in (
+                "src.graph_query.native_read_mode",
+                "src.graph_query.neo4j_native_extensions",
+            ):
                 continue
             # Template (and valid extensions) use ``from __future__ import annotations``.
             if mod == "__future__":
@@ -207,7 +219,7 @@ def try_author_extension(
         return {"activated": False, "error": "missing_description_schema_or_body"}
 
     body = textwrap.indent(textwrap.dedent(function_body), "    ")
-    full_src = _MODULE_TEMPLATE.format(body=body)
+    full_src = _MODULE_TEMPLATE.replace("__TOOL_NAME__", tool_name).replace("__BODY__", body)
     err = _validate_extension_source(full_src)
     if err:
         return {"activated": False, "error": f"validation_failed:{err}"}
@@ -271,9 +283,32 @@ def try_author_extension(
         tail = (proc.stdout + "\n" + proc.stderr).strip()[-4000:]
         return {"activated": False, "error": "pytest_failed", "pytest_tail": tail}
 
+    from src.llm.native_extension_author import try_author_native_extension
+
+    native_out = try_author_native_extension(
+        backend=backend,
+        client=client,
+        model_name=model_name,
+        tool_name=tool_name,
+        description=description,
+        input_schema=input_schema,
+        question=question,
+        preflight=preflight,
+        networkx_function_body=function_body,
+    )
+    if not native_out.get("activated"):
+        write_registry_entries(prior)
+        path.unlink(missing_ok=True)
+        return {
+            "activated": False,
+            "error": "native_port_failed",
+            "native_detail": native_out,
+        }
+
     return {
         "activated": True,
         "tool_name": tool_name,
         "registry_path": str(registry_path()),
         "module_path": str(path),
+        "native_module_path": native_out.get("native_module_path"),
     }
