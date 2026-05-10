@@ -37,11 +37,11 @@ def open_driver() -> Driver:
     uri = neo4j_uri()
     if not uri:
         raise RuntimeError(
-            "Set NEO4J_URI in .env.example (e.g. neo4j+s://xxxx.databases.neo4j.io for Aura)."
+            "Set NEO4J_URI in .env (see env.template; e.g. neo4j+s://xxxx.databases.neo4j.io for Aura)."
         )
     user, password = neo4j_auth()
     if not password:
-        raise RuntimeError("Set NEO4J_PASSWORD in .env.example.")
+        raise RuntimeError("Set NEO4J_PASSWORD in .env (see env.template).")
     return GraphDatabase.driver(uri, auth=(user, password))
 
 

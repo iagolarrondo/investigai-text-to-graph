@@ -340,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
             G_neo = fetch_di_graph_from_neo4j()
         except Exception as exc:
             raise SystemExit(
-                "Neo4j load failed. Check NEO4J_* in .env.example and run sync_processed.\n"
+                "Neo4j load failed. Check NEO4J_* in .env (see env.template) and run sync_processed.\n"
                 f"Detail: {exc}"
             ) from exc
 
@@ -371,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(str(exc)) from exc
     except Exception as exc:
         raise SystemExit(
-            "Neo4j load failed. Check NEO4J_* in .env.example and run sync_processed.\n"
+            "Neo4j load failed. Check NEO4J_* in .env (see env.template) and run sync_processed.\n"
             f"Detail: {exc}"
         ) from exc
 

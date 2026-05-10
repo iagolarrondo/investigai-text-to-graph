@@ -14,7 +14,7 @@ build/
 venv/
 env/
 
-# Environment and secrets (includes .env.example — keep secrets local only)
+# Environment and secrets (env.template in repo root is a safe placeholder list; keep real keys local)
 .env
 .env.*
 .env.example

@@ -11,7 +11,7 @@ Real ``edge_type`` / ``node_type`` stay as properties so existing domain strings
 Usage (from repo root)::
 
     pip install neo4j python-dotenv pandas
-    # Put NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD in ``.env.example`` (project convention).
+    # Put NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD in ``.env`` (see ``env.template``).
     python -m src.graph_store.sync_processed --clear
 
 Optional: ``--dry-run`` to print counts only; ``--batch-size 500`` for tuning.

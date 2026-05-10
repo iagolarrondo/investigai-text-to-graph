@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.graph_query.query_graph import search_nodes
+from src.session.node_id_canonical import resolve_node_id_to_graph
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,102 @@ _NODE_ID_TOKEN_RE = re.compile(
 def question_already_has_node_ids(question: str) -> bool:
     """Heuristic: if the question already contains node-id-like tokens, skip mention extraction."""
     return bool(_NODE_ID_TOKEN_RE.search(question or ""))
+
+
+def _span_overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    s1, e1 = a
+    s2, e2 = b
+    return s1 < e2 and s2 < e1
+
+
+def verified_graph_anchor_spans(question: str, G: Any) -> list[tuple[int, int, str]]:
+    """
+    Spans of node-id-like tokens that **resolve** to an existing node in ``G``,
+    plus the canonical graph id for each span.
+    """
+    q = question or ""
+    out: list[tuple[int, int, str]] = []
+    for m in _NODE_ID_TOKEN_RE.finditer(q):
+        raw = m.group(0).strip()
+        if not raw:
+            continue
+        canon = resolve_node_id_to_graph(raw, G)
+        if canon:
+            out.append((m.start(), m.end(), canon))
+    return out
+
+
+def filter_mentions_excluding_graph_anchors(
+    question: str,
+    mentions: list[dict[str, str | None]],
+    G: Any,
+) -> list[dict[str, str | None]]:
+    """
+    Drop mentions whose resolved span overlaps a **verified** graph node-id span,
+    so substrings like ``person`` inside ``person_5056`` are not re-searched as names.
+    """
+    spans = verified_graph_anchor_spans(question, G)
+    if not spans:
+        return list(mentions or [])
+
+    kept: list[dict[str, str | None]] = []
+    for row in mentions or []:
+        mention_raw = str(row.get("mention", "")).strip()
+        if not mention_raw:
+            continue
+        mspan = locate_mention_span(question, mention_raw)
+        if mspan is None:
+            kept.append(row)
+            continue
+        if any(_span_overlap(mspan, (vs[0], vs[1])) for vs in spans):
+            continue
+        kept.append(row)
+    return kept
+
+
+def verified_graph_node_ids_in_question(question: str, G: Any) -> list[str]:
+    """Ordered unique canonical ids for graph-resolvable node-id tokens in ``question``."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for _s, _e, cid in verified_graph_anchor_spans(question, G):
+        if cid not in seen:
+            seen.add(cid)
+            out.append(cid)
+    return out
+
+
+def unresolved_graph_like_id_tokens(question: str, G: Any) -> list[str]:
+    """Id-like tokens that do **not** resolve to any node in ``G``."""
+    bad: list[str] = []
+    q = question or ""
+    for m in _NODE_ID_TOKEN_RE.finditer(q):
+        raw = m.group(0).strip()
+        if raw and resolve_node_id_to_graph(raw, G) is None:
+            bad.append(raw)
+    return list(dict.fromkeys(bad))
+
+
+def append_verified_graph_node_hint(question: str, G: Any) -> str:
+    """
+    Append a short instruction block so the planner treats verified ids as anchors
+    and does not misinterpret them as missing after failed name search.
+    """
+    ids = verified_graph_node_ids_in_question(question, G)
+    if not ids:
+        return question
+    marker = "--- Verified graph node ids ---"
+    if marker in (question or ""):
+        return question
+    lines = "\n".join(f"- `{x}`" for x in ids)
+    return (
+        (question or "").rstrip()
+        + "\n\n"
+        + marker
+        + "\n"
+        + "The following ids **exist** in the loaded graph. Treat them as anchored entities; "
+        + "do **not** claim they are missing or require rediscovery via name search.\n"
+        + lines
+    )
 
 
 def locate_mention_span(question: str, mention: str) -> tuple[int, int] | None:

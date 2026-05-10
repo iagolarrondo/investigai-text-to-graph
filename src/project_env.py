@@ -1,4 +1,8 @@
-"""Project root and dotenv file. Prefer ``.env``; fall back to legacy ``.env.example``."""
+"""Project root and local ``.env`` loading.
+
+Copy ``env.template`` to ``.env`` in the project root and set your keys there.
+Only ``.env`` is loaded automatically (not ``env.template``).
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOTENV_PATH = PROJECT_ROOT / ".env"
-LEGACY_DOTENV_PATH = PROJECT_ROOT / ".env.example"
 
 
 def load_project_dotenv() -> None:
@@ -16,5 +19,3 @@ def load_project_dotenv() -> None:
         return
     if DOTENV_PATH.exists():
         load_dotenv(DOTENV_PATH)
-    elif LEGACY_DOTENV_PATH.exists():
-        load_dotenv(LEGACY_DOTENV_PATH)

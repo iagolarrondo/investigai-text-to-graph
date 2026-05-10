@@ -1,5 +1,7 @@
 # Current Repository Inspection (Pre-change)
 
+> **Historical / diffing only:** This file predates the **integrated** home app: **tool planner → judge → synthesis**, **`src/session/`** (rewrite / clarify / HTML export), optional **NetworkX vs Neo4j compare** on the main page, **`env.template`** (tracked) + **`.env`** (local), and extra pages (**Backend comparison**, **Evals**). For **accurate** architecture and setup, use **[README.md](../README.md)** first. The numbered “Actual runtime flow” below is **not** the current primary path (see README §2).
+
 ## Actual runtime flow (from code)
 
 1. Operational seed CSVs live under `data/interim/poc_v1_seed/`.

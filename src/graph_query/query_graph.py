@@ -1,7 +1,7 @@
 """
 Load the prototype graph and run small queries in memory with NetworkX.
 
-**Backend** (``GRAPH_BACKEND`` env — see ``.env.example``):
+**Backend** (``GRAPH_BACKEND`` env — see ``env.template``):
 
 - **Default / unset:** read ``data/processed/nodes.csv`` and ``edges.csv`` (from
   ``build_graph_files.py``).
@@ -175,7 +175,7 @@ def load_graph() -> nx.DiGraph:
     """
     Load a directed NetworkX graph.
 
-    When ``GRAPH_BACKEND=neo4j`` (see ``.env.example``), hydrates from Aura
+    When ``GRAPH_BACKEND=neo4j`` (see ``env.template``), hydrates from Aura
     ``(:Entity)`` / ``[:GRAPH_EDGE]`` (same attributes as CSV load). Otherwise reads
     processed CSVs.
 
@@ -190,7 +190,7 @@ def load_graph() -> nx.DiGraph:
         except Exception as exc:
             raise RuntimeError(
                 "Failed to load graph from Neo4j. Check NEO4J_URI / NEO4J_PASSWORD / "
-                "NEO4J_DATABASE in .env.example, Aura status, and that you ran "
+                "NEO4J_DATABASE in .env, Aura status, and that you ran "
                 "`python -m src.graph_store.sync_processed`."
             ) from exc
         if G.number_of_nodes() == 0:

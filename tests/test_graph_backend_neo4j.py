@@ -31,7 +31,7 @@ def test_csv_vs_neo4j_summarize_graph_parity(monkeypatch):
 
     load_project_dotenv()
     if not os.getenv("NEO4J_URI") or not os.getenv("NEO4J_PASSWORD"):
-        pytest.skip("NEO4J_URI / NEO4J_PASSWORD not set (after loading .env.example)")
+        pytest.skip("NEO4J_URI / NEO4J_PASSWORD not set (after loading .env; see env.template)")
 
     from src.graph_query import query_graph as qg
 

@@ -2,6 +2,8 @@
 
 A one-page view of how data moves through the prototype and what is (and is not) production-ready.
 
+**Note:** The main Streamlit investigation path uses a **tool planner → coverage judge → synthesis** loop (see **[README.md](../README.md)**). Optional **`src/llm/router.py`** intent routing exists for other scripts; it is not the primary driver of `app.py`.
+
 ---
 
 ## 1. Prototype architecture (short)
@@ -10,9 +12,9 @@ The PoC is a **local pipeline** that turns **tabular seed extracts** into a **pr
 
 - **Build:** Python reads normalized “resolved” and policy/claim tables, assigns stable **node ids**, and emits **edges** only when both endpoints exist.
 - **Query:** Code loads the CSVs into an in-memory graph (NetworkX), runs focused queries (claim neighborhood, shared banks, family clusters, business–address overlap), and returns tables plus short narratives.
-- **App:** Streamlit loads the graph once per session, routes user questions with a Claude-based intent router, and draws a small **subgraph** for each answer.
+- **App:** Streamlit loads the graph once per browser session (`st.session_state`). Each question can be adjusted by **session memory** (rewrite / clarify follow-ups from prior turns, then optional entity-resolution picks) before the **unchanged** planner → judge → synthesis run. The investigation home shows **metrics → session (history, HTML export, clear) → composer (optional compare NetworkX vs Neo4j) → outcome-first results** (answer and graph before reviewer / tool metadata). After each **single-backend** run, **`st.rerun()`** refreshes session UI and export data; **compare runs do not** append session history or the HTML report payload. **`src/app/ui_theme.py`** styles the home column; **`.streamlit/config.toml`** sets shared light tokens. Sidebar pages add **full graph**, **backend comparison**, and **evals**—see README.
 
-Code lives mainly under `src/graph_build/`, `src/graph_query/`, `src/llm/`, and `src/app/`.
+Code lives mainly under `src/graph_build/`, `src/graph_query/`, `src/llm/`, `src/app/`, and **`src/session/`** (memory + resolver + HTML report helpers).
 
 ---
 

@@ -8,6 +8,7 @@
 
 - [ ] Clone or sync the repo; open the **project root** (folder with `src/`, `data/`, `requirements.txt`).
 - [ ] Create/activate a **virtual environment** and install deps: `pip install -r requirements.txt`.
+- [ ] Copy **`env.template`** → **`.env`** in the project root and set at least the LLM keys you need (see README §4). Do not commit **`.env`**.
 - [ ] **Build the graph once** so `data/processed/nodes.csv` and `edges.csv` exist and are current.
 - [ ] **Smoke-test the app** locally (start Streamlit, click one demo); fix Wi‑Fi / VPN if the browser cannot reach `localhost`.
 - [ ] Optional: open **`docs/demo_cases.md`** on a second monitor or printed — your **talking-point** cheat sheet.
@@ -48,6 +49,8 @@ PYTHONPATH=. python src/graph_query/query_graph.py
 | **Main demo** | Browser tab at the URL Streamlit prints (usually `http://localhost:8501`). |
 | **Presenter notes** | `docs/demo_cases.md` — scenario names, entities, “what to mention.” |
 | **If asked “where does data come from?”** | `data/interim/poc_v1_seed/` (inputs) → `data/processed/*.csv` (graph export). |
+
+**Session memory (optional talking point):** Follow-up questions in the same tab can be **rewritten** (e.g. pronouns → node ids) or **clarified** before the next investigation. **Session** sits **above** the question box; **Clear session memory** resets turns; **Export session report (HTML)** matches the current **`session_turns`** after each **single-backend** run (the app **reruns** once when a turn completes so history and export stay in sync). **Compare NetworkX vs Neo4j** does **not** add turns or change the export—see **[README.md](../README.md)** §2.2. Nothing is persisted server-side for chat memory.
 
 Do **not** rely on notebooks for the core demo unless you explicitly want a detour.
 
