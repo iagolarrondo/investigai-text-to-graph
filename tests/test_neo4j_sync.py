@@ -33,7 +33,7 @@ def test_neo4j_verify_connectivity():
 
 def _delete_pytest_entities(driver, database: str | None) -> None:
     """Remove only nodes prefixed ``__pytest_`` so we never wipe a user's full graph."""
-    with driver.session(database=database) as session:
+    with driver.session(**({"database": database} if database else {})) as session:
         session.run(
             "MATCH (n:Entity) WHERE n.node_id STARTS WITH $pfx DETACH DELETE n",
             pfx="__pytest_",
@@ -46,6 +46,8 @@ def _delete_pytest_entities(driver, database: str | None) -> None:
 )
 def test_neo4j_sync_tiny_roundtrip_counts(tmp_path: Path):
     """MERGE three nodes + one edge under ``__pytest_*`` ids; does not ``MATCH (n) DELETE`` the DB."""
+    from neo4j.exceptions import ClientError
+
     from src.graph_store.neo4j_client import neo4j_database, open_driver
 
     nodes = tmp_path / "nodes.csv"
@@ -66,17 +68,27 @@ def test_neo4j_sync_tiny_roundtrip_counts(tmp_path: Path):
     driver = open_driver()
     db = neo4j_database()
     try:
-        _delete_pytest_entities(driver, db)
+        try:
+            _delete_pytest_entities(driver, db)
+        except ClientError as exc:
+            msg = str(exc).lower()
+            code = getattr(exc, "code", "") or ""
+            if "databasenotfound" in code.lower() or "not found" in msg or "does not exist" in msg:
+                pytest.skip(f"Neo4j database not available for sync test: {exc}")
+            raise
         stats = sync_processed_csv(nodes, edges, clear=False, batch_size=50, dry_run=False)
         assert stats["nodes"] == 3
         assert stats["edges_loaded"] == 1
 
-        with driver.session(database=db) as session:
+        with driver.session(**({"database": db} if db else {})) as session:
             one = session.run(
                 "MATCH (p:Entity {node_id: '__pytest_p1'})-[r:GRAPH_EDGE]->(a:Entity {node_id: '__pytest_a1'}) "
                 "RETURN r.edge_type AS t"
             ).single()
             assert one is not None and one["t"] == "LOCATED_IN"
     finally:
-        _delete_pytest_entities(driver, db)
+        try:
+            _delete_pytest_entities(driver, db)
+        except ClientError:
+            pass
         driver.close()

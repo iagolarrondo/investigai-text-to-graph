@@ -210,6 +210,10 @@ def inject_main_investigation_styles() -> None:
     padding: 0.54rem 1.2rem !important;
     box-shadow: 0 2px 5px rgba(24, 24, 27, 0.16) !important;
   }}
+  /* st.button primary labels (e.g. Run investigation) live in narrow columns — keep on one line */
+  section[data-testid="stMain"] .stButton > button[kind="primary"] {{
+    white-space: nowrap !important;
+  }}
   section[data-testid="stMain"] .stButton > button[kind="primary"]:hover,
   section[data-testid="stMain"] div[data-testid="stFormSubmitButton"] button[kind="primary"]:hover {{
     background-color: {_PRIMARY_HOVER} !important;

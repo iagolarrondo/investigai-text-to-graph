@@ -1,18 +1,20 @@
 """
 Whether investigation reads hit **Neo4j with Cypher** vs scanning **NetworkX**.
 
-**Architecture (NL → tools → Neo4j)**
+**Architecture (NL → planner → Neo4j)**
 
-1. The planner still selects the same **named tools** (``summarize_graph``, ``search_nodes``, …).
-2. **`NEO4J_READ_MODE=native`** — for tools listed in ``NATIVE_READ_TOOLS``, ``query_graph`` delegates to
-   ``neo4j_native_reads`` / ``neo4j_native_heavy`` (hand-written Cypher).
-3. **`NEO4J_READ_MODE=llm_cypher`** — same tool names, but ``tool_agent`` asks the **investigation LLM**
-   to emit read-only Cypher per call; no changes inside ``query_graph`` dispatch.
-4. With **native** or **llm_cypher**, investigation **tool execution** does not use NetworkX scans
-   (Cypher / LLM Cypher only). ``load_graph()`` / ``get_graph()`` may still be used for **UI**
-   (e.g. pyvis) on the CSV- or Aura-hydrated in-memory graph — not for those tool reads.
-5. Recommended: ``NEO4J_READ_MODE=native`` or ``llm_cypher`` + leave ``GRAPH_BACKEND`` unset so ``load_graph()`` uses **CSV**
-   for pyvis and unported tools, while Aura stays the investigation read path for ported tools.
+1. **`NEO4J_READ_MODE=native`** — the planner uses **named graph tools** (``summarize_graph``, ``search_nodes``, …).
+   For tools listed in ``NATIVE_READ_TOOLS``, ``query_graph`` delegates to ``neo4j_native_reads`` /
+   ``neo4j_native_heavy`` (hand-written Cypher).
+2. **`NEO4J_READ_MODE=llm_cypher`** — the planner does **not** use provider tool/function calling. The investigation
+   LLM runs a **plain chat loop** (``src/llm/cypher_planner.py``), emitting read-only Cypher as JSON; each executed
+   query is validated and run via ``run_read_query``. Steps are still recorded as ``ToolAgentStep`` with a synthetic
+   tool label (``__cypher__``) so judge and synthesis see the same trace shape.
+3. With **native** or **llm_cypher**, those investigation reads do not use NetworkX scans for the ported path
+   (Cypher only). ``load_graph()`` / ``get_graph()`` may still be used for **UI** (e.g. pyvis) on the CSV- or
+   Aura-hydrated in-memory graph.
+4. Recommended: ``NEO4J_READ_MODE=native`` or ``llm_cypher`` + leave ``GRAPH_BACKEND`` unset so ``load_graph()`` uses **CSV**
+   for pyvis and unported tools, while Aura stays the investigation read path where configured.
    Keep CSV and Aura in sync (``sync_processed``).
 
 Extend native coverage by adding a function to ``neo4j_native_reads`` and a dispatch branch in
@@ -29,7 +31,7 @@ _force_networkx_reads: ContextVar[bool] = ContextVar("_force_networkx_reads", de
 
 
 def neo4j_llm_cypher_reads_enabled() -> bool:
-    """True when each tool call is implemented by **LLM-generated** read Cypher (see ``cypher_tool_execution``)."""
+    """True when the investigation uses the **tool-free Cypher planner** (``src/llm/cypher_planner.py``), not named tools."""
     if _force_networkx_reads.get():
         return False
     v = (os.getenv("NEO4J_READ_MODE") or "").strip().lower()
@@ -84,8 +86,8 @@ def temporary_neo4j_read_llm_cypher():
     """
     Set ``NEO4J_READ_MODE=llm_cypher`` for the block; restore env after.
 
-    Investigation tools run via **LLM-authored Cypher** (``cypher_tool_execution``) instead of
-    ``neo4j_native_*`` Python. Pair with ``temporary_graph`` on a CSV-backed graph like the dual NX vs Cypher flow.
+    Enables the **tool-free Cypher planner** (chat JSON → validated read Cypher on Aura), not per-tool name mapping.
+    Pair with ``temporary_graph`` on a CSV-backed graph like the dual NX vs Cypher flow.
     """
     key = "NEO4J_READ_MODE"
     had = key in os.environ

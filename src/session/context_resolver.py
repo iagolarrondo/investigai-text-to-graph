@@ -8,13 +8,33 @@ from typing import Any
 
 from src.llm.json_extract import extract_json_object
 from src.llm.tool_agent import investigation_llm_backend
-from src.session.memory import MemoryDigest, build_memory_digest
+from src.session.memory import MemoryDigest, _node_type_prefix, build_memory_digest
 
 _HAS_NODE_ID_RE = re.compile(r"\b([A-Za-z]+\|[A-Za-z0-9_.-]+|[A-Za-z0-9_]+_[A-Za-z0-9_.-]+)\b")
 _CLAIM_REF_RE = re.compile(r"\b(that|this|same)\s+claim\b", re.IGNORECASE)
 _POLICY_REF_RE = re.compile(r"\b(that|this|same)\s+policy\b", re.IGNORECASE)
 _PERSON_REF_RE = re.compile(
     r"\b(that|this|same)\s+(person|insured|agent|customer|member)\b",
+    re.IGNORECASE,
+)
+_BUSINESS_ANAPHORA_RE = re.compile(
+    r"\b(?:that|this|the)\s+(?:same\s+)?(business|company|vendor|firm)\b"
+    r"|\b(?:same)\s+(business|company|vendor|firm)\b",
+    re.IGNORECASE,
+)
+_WHICH_BUSINESS_RE = re.compile(r"\b(which|what)\s+business\b", re.IGNORECASE)
+_FOLLOWUP_BUSINESS_TOPIC_RE = re.compile(
+    r"^\s*(?:and|also|what about|how about|then|now)\b[\s,:-]*.*\b(?:business|company|vendor|firm)\b",
+    re.IGNORECASE,
+)
+_ADDRESS_ANAPHORA_RE = re.compile(
+    r"\b(?:that|this|the)\s+(?:same\s+)?(?:address|street\s+address)\b"
+    r"|\b(?:same)\s+(?:address|street\s+address)\b",
+    re.IGNORECASE,
+)
+_WHICH_ADDRESS_RE = re.compile(r"\b(which|what)\s+address\b", re.IGNORECASE)
+_FOLLOWUP_ADDRESS_TOPIC_RE = re.compile(
+    r"^\s*(?:and|also|what about|how about|then|now)\b[\s,:-]*.*\b(?:address|street|residents?|neighbors?)\b",
     re.IGNORECASE,
 )
 _SAME_ONE_RE = re.compile(
@@ -43,24 +63,81 @@ class ResolverDecision:
     used_llm_fallback: bool = False
 
 
+_PRIMARY_KEY_FOR_KIND: dict[str, str] = {
+    "person": "primary_person",
+    "claim": "primary_claim",
+    "policy": "primary_policy",
+    "bank": "primary_bank",
+    "business": "primary_business",
+    "address": "primary_address",
+}
+
+
 def _effective_referents(
     digest: MemoryDigest,
-    session_overlay: dict[str, str | None] | None,
-) -> dict[str, str | None]:
+    session_overlay: dict[str, Any] | None,
+) -> dict[str, Any]:
     o = session_overlay or {}
-    merged = {
+    rollup = getattr(digest, "recent_entity_ids_by_kind", None) or {}
+    merged: dict[str, Any] = {
         "primary_person": o.get("primary_person") or digest.active_primary_person,
         "primary_claim": o.get("primary_claim") or digest.active_primary_claim,
         "primary_policy": o.get("primary_policy") or digest.active_primary_policy,
+        "primary_bank": o.get("primary_bank") or digest.active_primary_bank,
+        "primary_business": o.get("primary_business") or digest.active_primary_business,
+        "primary_address": o.get("primary_address") or digest.active_primary_address,
         "graph_focus": o.get("graph_focus") or digest.last_graph_focus,
     }
+    for kind in _PRIMARY_KEY_FOR_KIND:
+        key = f"ids_{kind}"
+        lo = list(o.get(key)) if isinstance(o.get(key), list) else []
+        ld = list(rollup.get(kind, ()))
+        combined = list(dict.fromkeys(lo + ld))[:40]
+        if combined:
+            merged[key] = combined
     try:
         from src.graph_query.query_graph import get_graph
         from src.session.node_id_canonical import canonicalize_referents_dict
 
         return canonicalize_referents_dict(merged, get_graph())
     except RuntimeError:
-        return {k: v for k, v in merged.items() if v}
+        out = {k: v for k, v in merged.items() if v is not None and v != ""}
+        for k, v in list(out.items()):
+            if isinstance(v, list) and not v:
+                del out[k]
+        return out
+
+
+def _ordered_entity_ids_for_kind(kind: str, digest: MemoryDigest, refs: dict[str, Any]) -> list[str]:
+    key = f"ids_{kind}"
+    out: list[str] = []
+    for src in (
+        refs.get(key) if isinstance(refs.get(key), list) else [],
+        list(digest.recent_entity_ids_by_kind.get(kind, ())),
+    ):
+        for x in src:
+            s = str(x).strip()
+            if s and s not in out:
+                out.append(s)
+    pk = _PRIMARY_KEY_FOR_KIND[kind]
+    pv = refs.get(pk)
+    if pv and str(pv).strip() and str(pv) not in out:
+        out.insert(0, str(pv).strip())
+    gf = refs.get("graph_focus")
+    if gf and str(gf).strip():
+        if _node_type_prefix(str(gf)) == kind:
+            gs = str(gf).strip()
+            if gs not in out:
+                out.insert(0, gs)
+    return out
+
+
+def _collect_business_ids(digest: MemoryDigest, refs: dict[str, Any]) -> list[str]:
+    return _ordered_entity_ids_for_kind("business", digest, refs)
+
+
+def _collect_address_ids(digest: MemoryDigest, refs: dict[str, Any]) -> list[str]:
+    return _ordered_entity_ids_for_kind("address", digest, refs)
 
 
 def _pick_recent_id(digest: MemoryDigest, prefix: str) -> str | None:
@@ -94,7 +171,7 @@ def _replace_pronouns_with_person(text: str, person_id: str) -> str:
     return out
 
 
-def _same_one_rewrite(question: str, refs: dict[str, str | None]) -> tuple[str, bool]:
+def _same_one_rewrite(question: str, refs: dict[str, Any]) -> tuple[str, bool]:
     if not _SAME_ONE_RE.search(question):
         return question, False
     m = _SAME_ONE_RE.search(question)
@@ -113,10 +190,201 @@ def _same_one_rewrite(question: str, refs: dict[str, str | None]) -> tuple[str, 
     return question, False
 
 
+def _business_anaphora_tail_is_false_positive(question: str, match: re.Match[str]) -> bool:
+    """Avoid rewriting phrases like 'the business model' or 'the business plan'."""
+    rest = question[match.end() :].strip()
+    if not rest:
+        return False
+    w = rest.split()[0].lower().rstrip(",.;:?!")
+    return w in (
+        "model",
+        "plan",
+        "case",
+        "idea",
+        "sense",
+        "owners",
+        "owner",
+        "logic",
+        "name",
+        "names",
+        "rules",
+        "hours",
+        "day",
+        "days",
+    )
+
+
+def _resolve_business_company_anaphora(
+    question: str, digest: MemoryDigest, refs: dict[str, Any]
+) -> ResolverDecision | None:
+    """Rewrite or clarify demonstrative business references using session anchors."""
+    if digest.turn_count <= 0:
+        return None
+    bids = _collect_business_ids(digest, refs)
+
+    m_bus = _BUSINESS_ANAPHORA_RE.search(question)
+    real_bus = bool(m_bus and not _business_anaphora_tail_is_false_positive(question, m_bus))
+    has_which = bool(_WHICH_BUSINESS_RE.search(question))
+
+    if real_bus or has_which:
+        if len(bids) > 1:
+            return _clarify_unresolved(
+                question,
+                hint="Several businesses appear in recent context; pick one (or name a Business|… id) so the investigation targets the right entity.",
+            )
+        if len(bids) == 0:
+            return _clarify_unresolved(
+                question,
+                hint="This question refers to a business without naming it, but no recent business appears in session memory.",
+            )
+        if real_bus:
+            rewritten = _BUSINESS_ANAPHORA_RE.sub(bids[0], question, count=1)
+            if rewritten != question:
+                return ResolverDecision(
+                    action="rewrite",
+                    resolved_question=rewritten,
+                    rationale="resolved business demonstrative to session business id",
+                )
+        if has_which:
+            rewritten = _WHICH_BUSINESS_RE.sub(bids[0], question, count=1)
+            if rewritten != question:
+                return ResolverDecision(
+                    action="rewrite",
+                    resolved_question=rewritten,
+                    rationale="resolved business demonstrative to session business id",
+                )
+        return None
+
+    if len(bids) == 1 and _FOLLOWUP_BUSINESS_TOPIC_RE.search(question) and not _HAS_NODE_ID_RE.search(
+        question
+    ):
+        return ResolverDecision(
+            action="rewrite",
+            resolved_question=f"For business {bids[0]}: {question}",
+            rationale="follow-up names business/company; anchored to the single business in session memory",
+        )
+    return None
+
+
+def _address_anaphora_tail_is_false_positive(question: str, match: re.Match[str]) -> bool:
+    rest = question[match.end() :].strip()
+    if not rest:
+        return False
+    w = rest.split()[0].lower().rstrip(",.;:?!")
+    return w in (
+        "line",
+        "lines",
+        "book",
+        "field",
+        "fields",
+        "format",
+        "verification",
+        "change",
+        "changes",
+        "label",
+        "labels",
+    )
+
+
+def _there_means_session_address(question: str) -> bool:
+    """Locative 'there' tied to a place (not existential 'is there')."""
+    if not re.search(r"\bthere\b", question, re.IGNORECASE):
+        return False
+    if re.search(r"\b(is|are|was|were|if|since)\s+there\b", question, re.IGNORECASE):
+        return False
+    if re.search(r"\bthere\s+(is|are|was|were)\b", question, re.IGNORECASE):
+        return False
+    if re.search(
+        r"(?is)\b(lives?|living|lived|residents?|resident|neighbor|neighbors?|people|persons?|located|"
+        r"linked|connected|tied|associated|policies|claims|near|around|from|at)\b.{0,120}\bthere\b",
+        question,
+    ):
+        return True
+    if re.search(
+        r"(?is)\b(what|who|how|which)\b.{5,120}\bthere\b\s*[.?!]?\s*$",
+        question,
+    ) and re.search(
+        r"\b(address|residents?|neighbors?|building|property|people|street|unit|apt|apartment)\b",
+        question,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _resolve_address_anaphora(
+    question: str, digest: MemoryDigest, refs: dict[str, Any]
+) -> ResolverDecision | None:
+    """Rewrite or clarify demonstrative / locative address references using session anchors."""
+    if digest.turn_count <= 0:
+        return None
+    aids = _collect_address_ids(digest, refs)
+
+    m_addr = _ADDRESS_ANAPHORA_RE.search(question)
+    real_addr = bool(m_addr and not _address_anaphora_tail_is_false_positive(question, m_addr))
+    has_which = bool(_WHICH_ADDRESS_RE.search(question))
+
+    if real_addr or has_which:
+        if len(aids) > 1:
+            return _clarify_unresolved(
+                question,
+                hint="Several addresses appear in recent context; pick one (or name an Address|… / address_… id) so the investigation targets the right location.",
+            )
+        if len(aids) == 0:
+            return _clarify_unresolved(
+                question,
+                hint="This question refers to an address without naming it, but no recent address appears in session memory.",
+            )
+        if real_addr:
+            rewritten = _ADDRESS_ANAPHORA_RE.sub(aids[0], question, count=1)
+            if rewritten != question:
+                return ResolverDecision(
+                    action="rewrite",
+                    resolved_question=rewritten,
+                    rationale="resolved address demonstrative to session address id",
+                )
+        if has_which:
+            rewritten = _WHICH_ADDRESS_RE.sub(aids[0], question, count=1)
+            if rewritten != question:
+                return ResolverDecision(
+                    action="rewrite",
+                    resolved_question=rewritten,
+                    rationale="resolved address demonstrative to session address id",
+                )
+        return None
+
+    if len(aids) == 1 and _FOLLOWUP_ADDRESS_TOPIC_RE.search(question) and not _HAS_NODE_ID_RE.search(question):
+        return ResolverDecision(
+            action="rewrite",
+            resolved_question=f"For address {aids[0]}: {question}",
+            rationale="follow-up names address/neighbors; anchored to the single address in session memory",
+        )
+
+    if _there_means_session_address(question):
+        if len(aids) > 1:
+            return _clarify_unresolved(
+                question,
+                hint="Several addresses appear in recent context; 'there' is ambiguous — which address do you mean?",
+            )
+        if len(aids) == 0:
+            return _clarify_unresolved(
+                question,
+                hint="This question uses 'there' like a place reference, but no recent address is in session memory. Name the Address|… / address_… id or rephrase.",
+            )
+        rewritten = re.sub(r"\bthere\b", aids[0], question, count=1, flags=re.IGNORECASE)
+        if rewritten != question:
+            return ResolverDecision(
+                action="rewrite",
+                resolved_question=rewritten,
+                rationale="resolved locative 'there' to session address id",
+            )
+    return None
+
+
 def _maybe_rewrite_deterministic(
     question: str,
     digest: MemoryDigest,
-    refs: dict[str, str | None],
+    refs: dict[str, Any],
 ) -> ResolverDecision | None:
     q = (question or "").strip()
     if not q:
@@ -127,6 +395,14 @@ def _maybe_rewrite_deterministic(
             resolved_question=q,
             rationale="no prior session turns",
         )
+
+    biz = _resolve_business_company_anaphora(q, digest, refs)
+    if biz is not None:
+        return biz
+
+    addr = _resolve_address_anaphora(q, digest, refs)
+    if addr is not None:
+        return addr
 
     rewritten = q
     changed = False
@@ -176,11 +452,31 @@ def _maybe_rewrite_deterministic(
     return None
 
 
+def _has_real_address_anaphora(question: str) -> bool:
+    m = _ADDRESS_ANAPHORA_RE.search(question)
+    if m and not _address_anaphora_tail_is_false_positive(question, m):
+        return True
+    if _WHICH_ADDRESS_RE.search(question):
+        return True
+    return _there_means_session_address(question)
+
+
+def _has_real_business_anaphora(question: str) -> bool:
+    m = _BUSINESS_ANAPHORA_RE.search(question)
+    if m and not _business_anaphora_tail_is_false_positive(question, m):
+        return True
+    return bool(_WHICH_BUSINESS_RE.search(question))
+
+
 def _has_hard_contextual_markers(question: str) -> bool:
     q = question or ""
     if _PRONOUN_RE.search(q):
         return True
     if _SAME_ONE_RE.search(q):
+        return True
+    if _has_real_business_anaphora(q):
+        return True
+    if _has_real_address_anaphora(q):
         return True
     if _CLAIM_REF_RE.search(q) or _POLICY_REF_RE.search(q) or _PERSON_REF_RE.search(q):
         return True
@@ -201,7 +497,13 @@ def _needs_clarification_after_rewrite(question: str, original: str) -> bool:
         return True
     if _SAME_ONE_RE.search(question):
         return True
-    if _CLAIM_REF_RE.search(question) or _POLICY_REF_RE.search(question) or _PERSON_REF_RE.search(question):
+    if (
+        _CLAIM_REF_RE.search(question)
+        or _POLICY_REF_RE.search(question)
+        or _PERSON_REF_RE.search(question)
+        or _has_real_business_anaphora(question)
+        or _has_real_address_anaphora(question)
+    ):
         return True
     if _has_weak_contextual_markers(question) and _has_weak_contextual_markers(original):
         return True
@@ -213,7 +515,7 @@ def _clarify_unresolved(original: str, *, hint: str) -> ResolverDecision:
         action="clarify",
         resolved_question=original,
         clarification_prompt=(
-            f"{hint} Please name the graph entity (for example Person|…, Claim|…, Policy|…) "
+            f"{hint} Please name the graph entity (for example Person|…, Claim|…, Policy|…, or Address|… / address_…) "
             "or rephrase with an explicit id so the investigation does not pick the wrong subject."
         ),
         rationale="contextual reference unresolved — blocking planner until clarified",
@@ -225,7 +527,7 @@ def _llm_rewrite_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
-def _rewrite_with_llm(question: str, digest: MemoryDigest, refs: dict[str, str | None]) -> ResolverDecision | None:
+def _rewrite_with_llm(question: str, digest: MemoryDigest, refs: dict[str, Any]) -> ResolverDecision | None:
     if not _llm_rewrite_enabled():
         return None
     backend = investigation_llm_backend()
@@ -240,7 +542,8 @@ def _rewrite_with_llm(question: str, digest: MemoryDigest, refs: dict[str, str |
         "You help rewrite short follow-up investigation questions into standalone questions.\n"
         "Session referents are authoritative when provided.\n"
         "Rules:\n"
-        "- If pronouns or 'that claim/policy/person' refer to the active referents, rewrite with explicit node ids.\n"
+        "- If pronouns or 'that claim/policy/person/business/company/address' refer to the active referents, rewrite with explicit node ids.\n"
+        "- Use primary_business / primary_address / graph_focus when the question is about a company or location from context.\n"
         "- If multiple subjects are plausible, return action clarify (never pass_through with unresolved pronouns).\n"
         "- For brand-new standalone questions with no anaphora, return action pass_through.\n"
         "Return JSON only: action, resolved_question, clarification_prompt, rationale.\n"
@@ -332,7 +635,7 @@ def resolve_question_with_session_memory(
     question: str,
     turns: list[dict[str, Any]],
     *,
-    session_referents: dict[str, str | None] | None = None,
+    session_referents: dict[str, Any] | None = None,
 ) -> ResolverDecision:
     q = (question or "").strip()
     digest = build_memory_digest(turns, last_n=5)
@@ -388,6 +691,7 @@ def resolve_question_with_session_memory(
 
     if weak_only:
         focus = refs.get("graph_focus")
+        rewritten = q
         if focus and _node_id_shape(focus):
             rewritten = re.sub(
                 r"\b(it|this|that)\b",
@@ -396,12 +700,22 @@ def resolve_question_with_session_memory(
                 count=1,
                 flags=re.IGNORECASE,
             )
-            if rewritten != q:
-                return ResolverDecision(
-                    action="rewrite",
-                    resolved_question=rewritten,
-                    rationale="weak anaphora resolved via last graph focus",
-                )
+        if rewritten != q:
+            return ResolverDecision(
+                action="rewrite",
+                resolved_question=rewritten,
+                rationale="weak anaphora resolved via last graph focus",
+            )
+        if _there_means_session_address(q):
+            aids = _collect_address_ids(digest, refs)
+            if len(aids) == 1:
+                rw2 = re.sub(r"\bthere\b", aids[0], q, count=1, flags=re.IGNORECASE)
+                if rw2 != q:
+                    return ResolverDecision(
+                        action="rewrite",
+                        resolved_question=rw2,
+                        rationale="locative 'there' resolved via session address",
+                    )
         llm_decision = _rewrite_with_llm(q, digest, refs)
         if llm_decision is not None and llm_decision.action != "pass_through":
             return llm_decision

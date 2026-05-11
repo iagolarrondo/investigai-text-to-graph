@@ -1,9 +1,12 @@
 from src.app.entity_resolution import (
     Candidate,
+    collect_er_candidate_node_ids,
+    collect_er_priority_node_ids,
     fallback_mentions,
     format_candidate_option,
     locate_mention_span,
     question_already_has_node_ids,
+    relational_person_search_token,
     rewrite_question,
 )
 
@@ -46,6 +49,31 @@ def test_fallback_mentions_detects_city_state_and_person_name():
     mentions = {m["mention"]: m["node_type_hint"] for m in ms}
     assert mentions.get("Emma Webb") == "Person"
     assert mentions.get("Quincy, MA") == "Address"
+
+
+def test_fallback_mentions_detects_relational_person_phrases():
+    q = "Who is associated with my friend?"
+    ms = fallback_mentions(q)
+    mentions = [m["mention"] for m in ms]
+    assert any(m.lower() == "my friend" for m in mentions)
+    assert any(m.get("node_type_hint") == "Person" for m in ms)
+
+
+def test_relational_person_search_token_strips_possessive():
+    assert relational_person_search_token("my friend") == "friend"
+    assert relational_person_search_token("my firiend") == "friend"
+    assert relational_person_search_token("Emma Webb") is None
+
+
+def test_collect_er_candidate_and_priority_node_ids():
+    cand = {
+        "Maria": [
+            {"node_id": "Person|1", "node_type": "Person", "label": "A", "match_reason": "x"},
+            {"node_id": "Person|2", "node_type": "Person", "label": "B", "match_reason": "x"},
+        ]
+    }
+    assert collect_er_candidate_node_ids(cand) == ["Person|1", "Person|2"]
+    assert collect_er_priority_node_ids(cand, {"Maria": "Person|2"}) == ["Person|2"]
 
 
 def test_mention_extractor_json_array_parsing():

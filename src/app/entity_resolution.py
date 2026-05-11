@@ -37,6 +37,7 @@ def fallback_mentions(question: str) -> list[dict[str, str | None]]:
     Supports:
     - Places like \"Quincy, MA\" (Address hint)
     - Two-word capitalized names like \"Emma Webb\" (Person hint)
+    - Relational person phrases like \"my friend\", \"the neighbor\" (Person hint)
     """
     q = (question or "").strip()
     if not q:
@@ -61,7 +62,68 @@ def fallback_mentions(question: str) -> list[dict[str, str | None]]:
     for m in re.finditer(r"\b([A-Z][a-z]+)\s+([A-Z][a-z]+)\b", q):
         add(m.group(0), "Person")
 
+    # Relational person references (LLM extractor often skips these as "too generic")
+    for m in re.finditer(
+        r"\b(?:my|the|a)\s+("
+        r"friend|friends|firiend|relative|relatives|brother|sister|siblings?|cousins?|"
+        r"neighbor|neighbour|neighbors?|neighbours?|"
+        r"colleagues?|coworkers?|co-workers?|partners?|spouses?|husbands?|wives?|"
+        r"parents?|mothers?|fathers?|moms?|dads?|children|child|sons?|daughters?"
+        r")\b",
+        q,
+        re.IGNORECASE,
+    ):
+        add(m.group(0), "Person")
+
     return out[:5]
+
+
+_RELATIONAL_PERSON_MENTION = re.compile(
+    r"^(?:my|the|a)\s+("
+    r"friend|friends|firiend|relative|relatives|brother|sister|siblings?|cousins?|"
+    r"neighbor|neighbour|neighbors?|neighbours?|"
+    r"colleagues?|coworkers?|co-workers?|partners?|spouses?|husbands?|wives?|"
+    r"parents?|mothers?|fathers?|moms?|dads?|children|child|sons?|daughters?"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def relational_person_search_token(mention: str) -> str | None:
+    """If ``mention`` is a relational person phrase, return a substantive token for ``search_nodes``."""
+    m = _RELATIONAL_PERSON_MENTION.match((mention or "").strip())
+    if not m:
+        return None
+    raw = m.group(1).lower()
+    if raw == "firiend":
+        raw = "friend"
+    # Normalize plural / inflection so "friends" still searches "friend"
+    for suffix, stem in (
+        ("friends", "friend"),
+        ("relatives", "relative"),
+        ("neighbors", "neighbor"),
+        ("neighbours", "neighbour"),
+        ("colleagues", "colleague"),
+        ("coworkers", "coworker"),
+        ("co-workers", "coworker"),
+        ("partners", "partner"),
+        ("spouses", "spouse"),
+        ("husbands", "husband"),
+        ("wives", "wife"),
+        ("parents", "parent"),
+        ("mothers", "mother"),
+        ("fathers", "father"),
+        ("moms", "mom"),
+        ("dads", "dad"),
+        ("sons", "son"),
+        ("daughters", "daughter"),
+        ("siblings", "sibling"),
+        ("cousins", "cousin"),
+        ("children", "child"),
+    ):
+        if raw == suffix:
+            return stem
+    return raw
 
 
 def candidate_nodes(*, mention: str, node_type_hint: str | None, limit: int = 25) -> list[Candidate]:
@@ -75,6 +137,12 @@ def candidate_nodes(*, mention: str, node_type_hint: str | None, limit: int = 25
     q = (mention or "").strip()
     if not q:
         return []
+
+    hint_norm = (node_type_hint or "").strip().lower()
+    rel_token = relational_person_search_token(q)
+    if rel_token and hint_norm in ("", "person"):
+        node_type_hint = node_type_hint or "Person"
+        hint_norm = "person"
 
     def _alt_queries(s: str) -> list[str]:
         """
@@ -124,8 +192,13 @@ def candidate_nodes(*, mention: str, node_type_hint: str | None, limit: int = 25
             )
         return [c for c in out if c.node_id]
 
+    if rel_token and hint_norm == "person":
+        queries = list(dict.fromkeys([rel_token, q]))
+    else:
+        queries = _alt_queries(q)
+
     # Try a few query variants, preferring type-filtered results first.
-    for qq in _alt_queries(q):
+    for qq in queries:
         res = (
             search_nodes(qq, node_type=node_type_hint, limit=max(limit, 25))
             if node_type_hint
@@ -136,7 +209,7 @@ def candidate_nodes(*, mention: str, node_type_hint: str | None, limit: int = 25
             return cands[:limit]
 
     if node_type_hint:
-        for qq in _alt_queries(q):
+        for qq in queries:
             res2 = search_nodes(qq, limit=max(limit, 25))
             c2 = to_candidates(res2)
             if c2:
@@ -149,6 +222,36 @@ def format_candidate_option(c: Candidate) -> str:
     lab = c.label or "(no label)"
     nt = c.node_type or "Unknown"
     return f"{nt} • {lab} • {c.node_id}"
+
+
+def collect_er_candidate_node_ids(cand_map: dict[str, list[dict[str, Any]]] | None) -> list[str]:
+    """Stable-unique node ids from serialized ER candidate rows (``Candidate.__dict__``)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for _mention, rows in (cand_map or {}).items():
+        for r in rows or []:
+            if not isinstance(r, dict):
+                continue
+            nid = str(r.get("node_id") or "").strip()
+            if nid and nid not in seen:
+                seen.add(nid)
+                out.append(nid)
+    return out
+
+
+def collect_er_priority_node_ids(
+    cand_map: dict[str, list[dict[str, Any]]] | None,
+    picks: dict[str, str] | None,
+) -> list[str]:
+    """User selections in mention key order (matches ER form / auto-singleton order)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in (cand_map or {}).keys():
+        nid = str((picks or {}).get(m) or "").strip()
+        if nid and nid not in seen:
+            seen.add(nid)
+            out.append(nid)
+    return out
 
 
 def rewrite_question(question: str, replacements: dict[str, str]) -> str:

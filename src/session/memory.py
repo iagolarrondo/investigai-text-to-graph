@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from src.app.investigation_graph import gather_investigation_anchors
 from src.llm.tool_agent import ToolAgentResult
@@ -21,7 +21,7 @@ class SessionTurn:
     anchors: list[str]
     reviewer_notes: list[str]
     synthesis_rationale: str
-    active_referents: dict[str, str | None] = field(default_factory=dict)
+    active_referents: dict[str, Any] = field(default_factory=dict)
     answer_summary_bullets: list[str] = field(default_factory=list)
 
 
@@ -35,7 +35,49 @@ class MemoryDigest:
     active_primary_person: str | None
     active_primary_claim: str | None
     active_primary_policy: str | None
+    active_primary_bank: str | None
+    active_primary_business: str | None
+    active_primary_address: str | None
     last_graph_focus: str | None
+    # All graph node ids from recent turns' anchors + focus, keyed by node kind (person, claim, …).
+    recent_entity_ids_by_kind: dict[str, tuple[str, ...]]
+
+
+_KIND_ORDER: tuple[str, ...] = ("person", "claim", "policy", "bank", "business", "address")
+_MAX_IDS_PER_REF_KEY = 50
+
+
+def _rollup_entity_ids_for_digest(rows: list[SessionTurn], G: Any | None) -> dict[str, tuple[str, ...]]:
+    buckets: dict[str, list[str]] = {k: [] for k in _KIND_ORDER}
+    seen: dict[str, set[str]] = {k: set() for k in _KIND_ORDER}
+
+    def tack(kind: str, raw_id: str | None) -> None:
+        if not kind or kind not in buckets:
+            return
+        nid = (raw_id or "").strip()
+        if not nid:
+            return
+        if G is not None:
+            nid = resolve_node_id_to_graph(nid, G) or nid
+        if nid not in seen[kind]:
+            seen[kind].add(nid)
+            buckets[kind].append(nid)
+
+    for r in rows:
+        tack(_node_type_prefix(r.graph_focus_node_id or ""), r.graph_focus_node_id)
+        for aid in (r.anchors or [])[:25]:
+            tack(_node_type_prefix(aid), aid)
+        ar = r.active_referents or {}
+        for kind in _KIND_ORDER:
+            key = f"ids_{kind}"
+            v = ar.get(key)
+            if isinstance(v, list):
+                for x in v:
+                    tack(kind, str(x).strip() if x else "")
+            pk = ar.get(f"primary_{kind}")
+            if pk and not isinstance(pk, list):
+                tack(kind, str(pk).strip())
+    return {k: tuple(v[:_MAX_IDS_PER_REF_KEY]) for k, v in buckets.items() if v}
 
 
 def _utc_now_iso() -> str:
@@ -84,67 +126,116 @@ def _node_type_prefix(node_id: str) -> str:
 def infer_active_referents(
     anchors: list[str],
     graph_focus_node_id: str | None,
-) -> dict[str, str | None]:
-    """Deterministic primary entities for pronoun / follow-up resolution."""
-    primary_person: str | None = None
-    primary_claim: str | None = None
-    primary_policy: str | None = None
-    primary_bank: str | None = None
+) -> dict[str, Any]:
+    """Deterministic primary entities plus full per-type id lists from anchors + focus."""
+    buckets: dict[str, list[str]] = {k: [] for k in _KIND_ORDER}
+    seen: dict[str, set[str]] = {k: set() for k in _KIND_ORDER}
+
+    def add_id(kind: str, raw: str | None) -> None:
+        if not kind or kind not in buckets:
+            return
+        nid = (raw or "").strip()
+        if not nid:
+            return
+        if nid not in seen[kind]:
+            seen[kind].add(nid)
+            buckets[kind].append(nid)
 
     ordered = list(dict.fromkeys(a for a in anchors if a))
-    for a in ordered:
-        kind = _node_type_prefix(a)
-        if kind == "person" and not primary_person:
-            primary_person = a
-        elif kind == "claim" and not primary_claim:
-            primary_claim = a
-        elif kind == "policy" and not primary_policy:
-            primary_policy = a
-        elif kind == "bank" and not primary_bank:
-            primary_bank = a
-
     focus = (graph_focus_node_id or "").strip() or None
     if focus:
-        fk = _node_type_prefix(focus)
-        if fk == "person":
-            primary_person = primary_person or focus
-        elif fk == "claim":
-            primary_claim = primary_claim or focus
-        elif fk == "policy":
-            primary_policy = primary_policy or focus
-        elif fk == "bank":
-            primary_bank = primary_bank or focus
+        add_id(_node_type_prefix(focus), focus)
+    for a in ordered:
+        add_id(_node_type_prefix(a), a)
 
-    return {
-        "primary_person": primary_person,
-        "primary_claim": primary_claim,
-        "primary_policy": primary_policy,
-        "primary_bank": primary_bank,
+    out: dict[str, Any] = {
+        "primary_person": buckets["person"][0] if buckets["person"] else None,
+        "primary_claim": buckets["claim"][0] if buckets["claim"] else None,
+        "primary_policy": buckets["policy"][0] if buckets["policy"] else None,
+        "primary_bank": buckets["bank"][0] if buckets["bank"] else None,
+        "primary_business": buckets["business"][0] if buckets["business"] else None,
+        "primary_address": buckets["address"][0] if buckets["address"] else None,
         "graph_focus": focus,
     }
+    for kind in _KIND_ORDER:
+        if buckets[kind]:
+            out[f"ids_{kind}"] = buckets[kind][: _MAX_IDS_PER_REF_KEY]
+    return out
+
+
+def extend_referents_with_node_ids(
+    refs: dict[str, Any],
+    *,
+    additional_ids: Iterable[str] | None = None,
+    priority_ids: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Merge extra graph node ids (e.g. ER disambiguation candidates) into ``ids_*``.
+
+    Per kind, order is: ``priority_ids`` (user selections) first, then other
+    ``additional_ids`` (typically all candidates), then ids already in ``refs``.
+    """
+    out = dict(refs)
+    pri = [str(x).strip() for x in (priority_ids or []) if x and str(x).strip()]
+    add = [str(x).strip() for x in (additional_ids or []) if x and str(x).strip()]
+    pri_set = set(pri)
+
+    for kind in _KIND_ORDER:
+        key = f"ids_{kind}"
+        seed: list[str] = []
+        cur = out.get(key)
+        if isinstance(cur, list):
+            for x in cur:
+                sx = str(x).strip()
+                if sx:
+                    seed.append(sx)
+        pk = out.get(f"primary_{kind}")
+        if pk and not isinstance(pk, list):
+            ps = str(pk).strip()
+            if ps and ps not in seed:
+                seed.insert(0, ps)
+        seed = list(dict.fromkeys(seed))
+        pri_k = [x for x in pri if _node_type_prefix(x) == kind]
+        add_k = [x for x in add if _node_type_prefix(x) == kind and x not in pri_set]
+        head = list(dict.fromkeys(pri_k + add_k))
+        head_set = set(head)
+        tail = [x for x in seed if x not in head_set]
+        merged = (head + tail)[:_MAX_IDS_PER_REF_KEY]
+        if merged:
+            out[key] = merged
+    return out
 
 
 def merge_session_referents(
-    prev: dict[str, str | None] | None,
-    turn_refs: dict[str, str | None],
-) -> dict[str, str | None]:
-    """Rolling session referents: graph-canonical new values override; invalid updates are skipped."""
-    out: dict[str, str | None] = dict(prev or {})
+    prev: dict[str, Any] | None,
+    turn_refs: dict[str, Any],
+) -> dict[str, Any]:
+    """Rolling session referents: graph-canonical new values override; list ids merge newest-first."""
+    out: dict[str, Any] = dict(prev or {})
     try:
         from src.graph_query.query_graph import get_graph
 
         G = get_graph()
-        raw_updates = {k: str(v).strip() for k, v in (turn_refs or {}).items() if v and str(v).strip()}
+        raw_updates = dict(turn_refs or {})
         canon_updates = canonicalize_referents_dict(raw_updates, G)
         for k, v in canon_updates.items():
-            if v:
+            if isinstance(v, list):
+                prev_v = out.get(k)
+                prev_list = list(prev_v) if isinstance(prev_v, list) else ([] if not prev_v else [str(prev_v)])
+                merged = list(dict.fromkeys(list(v) + prev_list))[:_MAX_IDS_PER_REF_KEY]
+                out[k] = merged
+            elif v:
                 out[k] = v
         return canonicalize_referents_dict(out, G)
     except RuntimeError:
         for k, v in (turn_refs or {}).items():
-            if v and str(v).strip():
+            if isinstance(v, list):
+                prev_v = out.get(k)
+                prev_list = list(prev_v) if isinstance(prev_v, list) else ([] if not prev_v else [str(prev_v)])
+                merged = list(dict.fromkeys([str(x) for x in v if x] + prev_list))[:_MAX_IDS_PER_REF_KEY]
+                out[k] = merged
+            elif v and str(v).strip():
                 out[k] = str(v).strip()
-        return {k: v for k, v in out.items() if v}
+        return out
 
 
 def _session_turn_from_row(t: Any) -> SessionTurn:
@@ -211,7 +302,11 @@ def build_memory_digest(turns: list[dict[str, Any]] | list[SessionTurn], *, last
             active_primary_person=None,
             active_primary_claim=None,
             active_primary_policy=None,
+            active_primary_bank=None,
+            active_primary_business=None,
+            active_primary_address=None,
             last_graph_focus=None,
+            recent_entity_ids_by_kind={},
         )
     focus = [x.graph_focus_node_id for x in rows if x.graph_focus_node_id]
     anchors: list[str] = []
@@ -221,6 +316,18 @@ def build_memory_digest(turns: list[dict[str, Any]] | list[SessionTurn], *, last
 
     last = rows[-1]
     ref = dict(last.active_referents or {})
+    inferred = infer_active_referents(list(last.anchors or []), last.graph_focus_node_id)
+    for k, v in inferred.items():
+        if isinstance(v, list):
+            if not v:
+                continue
+            existing = ref.get(k)
+            if isinstance(existing, list):
+                ref[k] = list(dict.fromkeys(list(v) + list(existing)))[:_MAX_IDS_PER_REF_KEY]
+            elif not existing:
+                ref[k] = v
+        elif v and not ref.get(k):
+            ref[k] = v
     G = None
     try:
         from src.graph_query.query_graph import get_graph
@@ -237,6 +344,8 @@ def build_memory_digest(turns: list[dict[str, Any]] | list[SessionTurn], *, last
     if G is not None and last_graph_focus:
         last_graph_focus = resolve_node_id_to_graph(str(last_graph_focus), G)
 
+    rollup = _rollup_entity_ids_for_digest(rows, G)
+
     return MemoryDigest(
         turn_count=len(turns),
         recent_questions=[r.user_question for r in rows],
@@ -246,7 +355,11 @@ def build_memory_digest(turns: list[dict[str, Any]] | list[SessionTurn], *, last
         active_primary_person=ref.get("primary_person"),
         active_primary_claim=ref.get("primary_claim"),
         active_primary_policy=ref.get("primary_policy"),
+        active_primary_bank=ref.get("primary_bank"),
+        active_primary_business=ref.get("primary_business"),
+        active_primary_address=ref.get("primary_address"),
         last_graph_focus=last_graph_focus,
+        recent_entity_ids_by_kind=rollup,
     )
 
 

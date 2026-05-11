@@ -39,3 +39,45 @@ def test_rewrite_clear_contextual_claim_reference() -> None:
     assert d.action == "rewrite"
     assert "Claim|C001" in d.resolved_question
 
+
+def test_rewrite_that_business_when_single_in_session() -> None:
+    turns = [_turn(1, "Prior", "Prior", "Ans", "Business|B1", ["Business|B1"])]
+    d = resolve_question_with_session_memory("Who owns that business?", turns)
+    assert d.action == "rewrite"
+    assert "Business|B1" in d.resolved_question
+
+
+def test_clarify_when_multiple_businesses_in_session() -> None:
+    turns = [_turn(1, "Prior", "Prior", "Ans", "Business|B1", ["Business|B1", "Business|B2"])]
+    d = resolve_question_with_session_memory("What about the business?", turns)
+    assert d.action == "clarify"
+
+
+def test_followup_line_anchors_single_business() -> None:
+    turns = [_turn(1, "Prior", "Prior", "Ans", "Business|BX", ["Business|BX"])]
+    d = resolve_question_with_session_memory(
+        "Also map business relationships for fraud indicators", turns
+    )
+    assert d.action == "rewrite"
+    assert "Business|BX" in d.resolved_question
+
+
+def test_rewrite_that_address_single_in_session() -> None:
+    turns = [_turn(1, "Prior", "Prior", "Ans", "address_9002", ["address_9002", "Person|1"])]
+    d = resolve_question_with_session_memory("Who lives at that address?", turns)
+    assert d.action == "rewrite"
+    assert "address_9002" in d.resolved_question
+
+
+def test_rewrite_there_locative_single_address() -> None:
+    turns = [_turn(1, "Prior", "Prior", "Ans", "address_9002", ["address_9002"])]
+    d = resolve_question_with_session_memory("What policies are linked there?", turns)
+    assert d.action == "rewrite"
+    assert "address_9002" in d.resolved_question
+
+
+def test_clarify_when_multiple_addresses_in_session() -> None:
+    turns = [_turn(1, "Prior", "Prior", "Ans", "address_9002", ["address_9002", "address_9035"])]
+    d = resolve_question_with_session_memory("Who lives there?", turns)
+    assert d.action == "clarify"
+

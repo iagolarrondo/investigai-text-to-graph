@@ -12,8 +12,8 @@ Either way, downstream helpers and LLM tools see identical NetworkX semantics.
 
 When ``NEO4J_READ_MODE=native``, investigation helpers listed in ``NATIVE_READ_TOOLS`` run
 **Cypher** against Aura (``neo4j_native_reads`` + ``neo4j_native_heavy``) while tool names stay the same.
-When ``NEO4J_READ_MODE=llm_cypher``, the same tool names are handled in ``tool_agent`` via
-``cypher_tool_execution`` (investigation LLM → read-only Cypher) and these functions stay on the NetworkX path
+When ``NEO4J_READ_MODE=llm_cypher``, the **tool-free Cypher planner** in ``src/llm/cypher_planner.py`` handles
+investigation reads (no named-tool dispatch here); these ``query_graph`` functions stay on the NetworkX path
 when a graph is loaded.
 Use :func:`force_networkx_reads` (see ``native_read_mode``) to scan ``_graph`` instead for NX vs Cypher comparisons.
 

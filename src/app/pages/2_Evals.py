@@ -50,7 +50,7 @@ from src.llm.tool_agent import run_tool_planner_agent  # noqa: E402
 _BACKEND_LABEL_TO_ID: dict[str, str] = {
     "NetworkX (Dynamic Python)": "networkx",
     "Neo4j (NetworkX functions translated to Cypher)": "neo4j_native",
-    "Neo4j (LLM writes Cypher directly)": "llm_cypher",
+    "Neo4j (tool-free Cypher planner)": "llm_cypher",
 }
 _SINGLE_BACKEND_LABELS: list[str] = list(_BACKEND_LABEL_TO_ID.keys())
 
@@ -231,7 +231,7 @@ else:
         help=(
             "- **NetworkX (Dynamic Python)** — in-memory Python on a NetworkX DiGraph (default, no DB).\n"
             "- **Neo4j (NetworkX functions translated to Cypher)** — engineer-written Cypher of the same tools, running on Aura.\n"
-            "- **Neo4j (LLM writes Cypher directly)** — model authors read-only Cypher per tool at runtime, executed on Aura."
+            "- **Neo4j (tool-free Cypher planner)** — no named graph tools: read-only Cypher JSON in a chat loop, executed on Aura."
         ),
     ) or _SINGLE_BACKEND_LABELS[0]
     selected_backends = [(_BACKEND_LABEL_TO_ID[single_label], single_label)]

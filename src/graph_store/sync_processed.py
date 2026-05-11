@@ -81,14 +81,14 @@ def _ensure_schema(driver: Driver, database: str | None) -> None:
         tx.run(_ENSURE_CONSTRAINTS)
         tx.run(_CREATE_NODE_TYPE_INDEX)
 
-    with driver.session(database=database) as session:
+    with driver.session(**({"database": database} if database else {})) as session:
         session.execute_write(work)
 
     def rel_index(tx):
         tx.run(_CREATE_EDGE_TYPE_INDEX)
 
     try:
-        with driver.session(database=database) as session:
+        with driver.session(**({"database": database} if database else {})) as session:
             session.execute_write(rel_index)
     except ClientError:
         # Relationship property indexes require newer Neo4j; sync still works without this.
@@ -96,7 +96,7 @@ def _ensure_schema(driver: Driver, database: str | None) -> None:
 
 
 def _clear_graph(driver: Driver, database: str | None) -> None:
-    with driver.session(database=database) as session:
+    with driver.session(**({"database": database} if database else {})) as session:
         session.execute_write(lambda tx: tx.run(_DELETE_ALL))
 
 
@@ -109,7 +109,7 @@ def _write_batches(
     def run_batch(tx, batch: list[dict], cy: str = cypher):
         tx.run(cy, batch=batch)
 
-    with driver.session(database=database) as session:
+    with driver.session(**({"database": database} if database else {})) as session:
         for batch in batches:
             session.execute_write(run_batch, batch)
 

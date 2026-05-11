@@ -39,6 +39,14 @@ def test_canonicalize_id_list_dedupes_pipe_and_snake() -> None:
     assert out == ["person_5063"]
 
 
+def test_canonicalize_referents_dict_canonicalizes_id_lists() -> None:
+    G = _graph_person_snake_only()
+    refs = {"ids_person": ["Person|5063", "Person|9999"], "primary_claim": "Claim|X"}
+    out = canonicalize_referents_dict(refs, G)
+    assert out.get("ids_person") == ["person_5063"]
+    assert "primary_claim" not in out
+
+
 def test_canonicalize_referents_drops_invalid_pipe_when_not_in_graph() -> None:
     G = _graph_person_snake_only()
     refs = {"primary_person": "Person|9999", "primary_claim": None}

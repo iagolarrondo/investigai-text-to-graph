@@ -55,7 +55,7 @@ def fetch_di_graph_from_neo4j() -> nx.DiGraph:
     """
 
     try:
-        with driver.session(database=db) as session:
+        with driver.session(**({"database": db} if db else {})) as session:
             for row in session.run(q_nodes):
                 nid = row["node_id"]
                 if nid is None:

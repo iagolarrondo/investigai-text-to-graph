@@ -48,7 +48,12 @@ def test_csv_vs_neo4j_summarize_graph_parity(monkeypatch):
 
     monkeypatch.setenv("GRAPH_BACKEND", "neo4j")
     qg._graph = None
-    qg.load_graph()
+    try:
+        qg.load_graph()
+    except RuntimeError as exc:
+        if "Failed to load graph from Neo4j" in str(exc):
+            pytest.skip(str(exc))
+        raise
     summary_neo = qg.summarize_graph()
 
     assert summary_neo["num_nodes"] == summary_csv["num_nodes"]

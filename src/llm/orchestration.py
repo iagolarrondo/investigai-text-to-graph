@@ -24,6 +24,8 @@ from src.graph_query.native_read_mode import neo4j_llm_cypher_reads_enabled, neo
 from src.graph_query.query_graph import get_graph
 from src.llm.json_extract import extract_json_object
 from src.llm.prompts import (
+    COVERAGE_JUDGE_CYPHER_TRACE_ADDENDUM,
+    SYNTHESIS_CYPHER_TRACE_ADDENDUM,
     SYSTEM_COVERAGE_JUDGE,
     SYSTEM_COVERAGE_JUDGE_MERGED,
     SYSTEM_COVERAGE_JUDGE_MERGED_OLLAMA,
@@ -74,22 +76,38 @@ def _truncate_for_local_llm(blob: str, max_chars: int) -> str:
     tail = max_chars - head - 120
     return (
         blob[:head]
-        + "\n\n[... middle of tool trace omitted for local model context ...]\n\n"
+        + "\n\n[... middle of investigation trace omitted for local model context ...]\n\n"
         + blob[-tail:]
     )
 
 
 def _serialize_trace_for_judge(question: str, steps: list[ToolAgentStep]) -> str:
+    from src.graph_query.native_read_mode import neo4j_llm_cypher_reads_enabled
+    from src.llm.cypher_planner import CYPHER_PLANNER_STEP_TOOL
+
+    cypher_mode = neo4j_llm_cypher_reads_enabled()
+    title = (
+        "\n--- FULL_INVESTIGATION_TRACE (chronological; Cypher steps — outputs are complete) ---\n"
+        if cypher_mode
+        else "\n--- FULL_TOOL_TRACE (chronological; outputs are complete, not shortened) ---\n"
+    )
     parts: list[str] = [
         f"USER_QUESTION:\n{question}\n",
-        "\n--- FULL_TOOL_TRACE (chronological; outputs are complete, not shortened) ---\n",
+        title,
     ]
     for i, s in enumerate(steps, start=1):
-        parts.append(
-            f"\n### Step {i} (planner phase {s.planner_phase}): `{s.tool}`\n"
-            f"INPUT:\n{json.dumps(s.input, indent=2, default=str)}\n"
-            f"OUTPUT:\n{s.result_preview}\n"
-        )
+        if cypher_mode and s.tool == CYPHER_PLANNER_STEP_TOOL:
+            parts.append(
+                f"\n### Cypher step {i} (planner phase {s.planner_phase})\n"
+                f"INPUT:\n{json.dumps(s.input, indent=2, default=str)}\n"
+                f"OUTPUT:\n{s.result_preview}\n"
+            )
+        else:
+            parts.append(
+                f"\n### Step {i} (planner phase {s.planner_phase}): `{s.tool}`\n"
+                f"INPUT:\n{json.dumps(s.input, indent=2, default=str)}\n"
+                f"OUTPUT:\n{s.result_preview}\n"
+            )
     return "".join(parts)
 
 
@@ -247,6 +265,7 @@ def run_investigation_orchestrator(
     """
     out = ToolAgentResult(question=question.strip())
     merge_js = _merge_judge_synthesis_enabled()
+    llm_cypher_trace = neo4j_llm_cypher_reads_enabled()
 
     def _emit(event_type: str, message: str, **data: Any) -> None:
         if progress_cb is None:
@@ -273,12 +292,20 @@ def run_investigation_orchestrator(
         host = (os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").strip()
         client: Any = Client(host=host, timeout=_ollama_client_timeout())
         model_name = OLLAMA_MODEL
+        from src.llm.cypher_planner import full_planner_system_instruction
+
+        _planner_sys = full_planner_system_instruction() if llm_cypher_trace else SYSTEM_TOOL_AGENT
         planner_state: list[Any] = [
-            {"role": "system", "content": SYSTEM_TOOL_AGENT},
+            {"role": "system", "content": _planner_sys},
             {"role": "user", "content": out.question},
         ]
         _trace_lim = _ollama_max_trace_chars()
         _ollama_judge_sys = SYSTEM_COVERAGE_JUDGE_MERGED_OLLAMA if merge_js else SYSTEM_COVERAGE_JUDGE_OLLAMA
+        if llm_cypher_trace:
+            _ollama_judge_sys = _ollama_judge_sys + COVERAGE_JUDGE_CYPHER_TRACE_ADDENDUM
+        _ollama_synth_sys = SYSTEM_INVESTIGATION_SYNTHESIS_OLLAMA
+        if llm_cypher_trace:
+            _ollama_synth_sys = _ollama_synth_sys + SYNTHESIS_CYPHER_TRACE_ADDENDUM
 
         def _judge_raw() -> str:
             blob = _serialize_trace_for_judge(out.question, out.steps)
@@ -300,7 +327,7 @@ def run_investigation_orchestrator(
             return ollama_generate_text(
                 client,
                 model=model_name,
-                system_instruction=SYSTEM_INVESTIGATION_SYNTHESIS_OLLAMA,
+                system_instruction=_ollama_synth_sys,
                 user_text=intro + _truncate_for_local_llm(blob, _trace_lim),
                 num_predict=8192,
                 json_mode=True,
@@ -322,6 +349,11 @@ def run_investigation_orchestrator(
         model_name = ANTHROPIC_MODEL
         planner_state: list[Any] = [{"role": "user", "content": out.question}]
         _anthropic_judge_sys = SYSTEM_COVERAGE_JUDGE_MERGED if merge_js else SYSTEM_COVERAGE_JUDGE
+        if llm_cypher_trace:
+            _anthropic_judge_sys = _anthropic_judge_sys + COVERAGE_JUDGE_CYPHER_TRACE_ADDENDUM
+        _anthropic_synth_sys = SYSTEM_INVESTIGATION_SYNTHESIS_ANTHROPIC
+        if llm_cypher_trace:
+            _anthropic_synth_sys = _anthropic_synth_sys + SYNTHESIS_CYPHER_TRACE_ADDENDUM
 
         def _judge_raw() -> str:
             return anthropic_generate_text(
@@ -341,7 +373,7 @@ def run_investigation_orchestrator(
             return anthropic_generate_text(
                 client,
                 model=model_name,
-                system_instruction=SYSTEM_INVESTIGATION_SYNTHESIS_ANTHROPIC,
+                system_instruction=_anthropic_synth_sys,
                 user_text=intro + blob,
                 max_tokens=8192,
             )
@@ -362,6 +394,11 @@ def run_investigation_orchestrator(
             types.Content(role="user", parts=[types.Part(text=out.question)]),
         ]
         _gemini_judge_sys = SYSTEM_COVERAGE_JUDGE_MERGED if merge_js else SYSTEM_COVERAGE_JUDGE
+        if llm_cypher_trace:
+            _gemini_judge_sys = _gemini_judge_sys + COVERAGE_JUDGE_CYPHER_TRACE_ADDENDUM
+        _gemini_synth_sys = SYSTEM_INVESTIGATION_SYNTHESIS_GEMINI
+        if llm_cypher_trace:
+            _gemini_synth_sys = _gemini_synth_sys + SYNTHESIS_CYPHER_TRACE_ADDENDUM
 
         def _judge_raw() -> str:
             return generate_text(
@@ -381,7 +418,7 @@ def run_investigation_orchestrator(
             return generate_text(
                 client,
                 model=model_name,
-                system_instruction=SYSTEM_INVESTIGATION_SYNTHESIS_GEMINI,
+                system_instruction=_gemini_synth_sys,
                 user_text=intro + blob,
                 max_output_tokens=8192,
             )
@@ -390,55 +427,70 @@ def run_investigation_orchestrator(
     from src.llm.tool_preflight import run_tool_preflight, tool_catalog_json_from_graph_tools
 
     refresh_graph_tools_with_extensions()
-    try:
-        _emit("tool_eval_start", "Tool evaluation: checking whether existing tools cover your question…")
-        out.preflight = run_tool_preflight(backend, client, model_name, out.question)
-        _emit(
-            "tool_eval_done",
-            f"Tool evaluation complete: decision={str((out.preflight or {}).get('decision', 'sufficient'))}",
-            decision=str((out.preflight or {}).get("decision", "")),
-        )
-    except Exception as exc:
+    if llm_cypher_trace:
         out.preflight = {
             "decision": "sufficient",
-            "rationale": f"Preflight raised {type(exc).__name__}; continuing without extension.",
+            "rationale": "NEO4J_READ_MODE=llm_cypher uses a tool-free Cypher planner (tool preflight skipped).",
             "gap_summary": "",
             "efficiency_note": "",
             "recommended_plan": "",
-            "preflight_error": str(exc),
         }
-
-    decision = str((out.preflight or {}).get("decision", "sufficient")).strip().lower()
-    if decision in ("insufficient", "sufficient_but_inefficient"):
-        _emit("extension_author_start", "Extension authoring: generating a new helper tool…")
-        out.extension_authoring = try_author_extension(
-            backend=backend,
-            client=client,
-            model_name=model_name,
-            question=out.question,
-            preflight=out.preflight or {},
-            tool_catalog_json=tool_catalog_json_from_graph_tools(),
-        )
-        _emit(
-            "extension_author_done",
-            "Extension authoring complete.",
-            activated=bool((out.extension_authoring or {}).get("activated")),
-            tool_name=str((out.extension_authoring or {}).get("tool_name", "")),
-        )
-        if (out.extension_authoring or {}).get("activated"):
-            refresh_graph_tools_with_extensions()
-    else:
         out.extension_authoring = None
+        _emit(
+            "tool_eval_done",
+            "Skipped tool preflight (llm_cypher / Cypher-only planner).",
+            decision="sufficient",
+        )
+    else:
+        try:
+            _emit("tool_eval_start", "Tool evaluation: checking whether existing tools cover your question…")
+            out.preflight = run_tool_preflight(backend, client, model_name, out.question)
+            _emit(
+                "tool_eval_done",
+                f"Tool evaluation complete: decision={str((out.preflight or {}).get('decision', 'sufficient'))}",
+                decision=str((out.preflight or {}).get("decision", "")),
+            )
+        except Exception as exc:
+            out.preflight = {
+                "decision": "sufficient",
+                "rationale": f"Preflight raised {type(exc).__name__}; continuing without extension.",
+                "gap_summary": "",
+                "efficiency_note": "",
+                "recommended_plan": "",
+                "preflight_error": str(exc),
+            }
 
-    plan = str((out.preflight or {}).get("recommended_plan", "")).strip()
-    eff = str((out.preflight or {}).get("efficiency_note", "")).strip()
-    if plan or eff:
-        bits = []
-        if plan:
-            bits.append(f"Suggested plan: {plan}")
-        if eff:
-            bits.append(f"Efficiency note: {eff}")
-        _inject_planner_preflight_seed(backend, planner_state, "\n".join(bits))
+        decision = str((out.preflight or {}).get("decision", "sufficient")).strip().lower()
+        if decision in ("insufficient", "sufficient_but_inefficient"):
+            _emit("extension_author_start", "Extension authoring: generating a new helper tool…")
+            out.extension_authoring = try_author_extension(
+                backend=backend,
+                client=client,
+                model_name=model_name,
+                question=out.question,
+                preflight=out.preflight or {},
+                tool_catalog_json=tool_catalog_json_from_graph_tools(),
+            )
+            _emit(
+                "extension_author_done",
+                "Extension authoring complete.",
+                activated=bool((out.extension_authoring or {}).get("activated")),
+                tool_name=str((out.extension_authoring or {}).get("tool_name", "")),
+            )
+            if (out.extension_authoring or {}).get("activated"):
+                refresh_graph_tools_with_extensions()
+        else:
+            out.extension_authoring = None
+
+        plan = str((out.preflight or {}).get("recommended_plan", "")).strip()
+        eff = str((out.preflight or {}).get("efficiency_note", "")).strip()
+        if plan or eff:
+            bits = []
+            if plan:
+                bits.append(f"Suggested plan: {plan}")
+            if eff:
+                bits.append(f"Efficiency note: {eff}")
+            _inject_planner_preflight_seed(backend, planner_state, "\n".join(bits))
 
     phase = 0
     planner_phases_run = 0
@@ -450,8 +502,13 @@ def run_investigation_orchestrator(
     pending_merged_synthesis: dict[str, Any] | None = None
 
     while True:
-        phase_label = "Tool Steps" if phase == 0 else f"Planner phase {phase}"
-        _emit("planner_phase_start", f"{phase_label}: choosing and running tools…", planner_phase=phase)
+        if llm_cypher_trace:
+            phase_label = "Cypher planner" if phase == 0 else f"Cypher planner phase {phase}"
+            phase_action = "emitting read-only Cypher…"
+        else:
+            phase_label = "Tool Steps" if phase == 0 else f"Planner phase {phase}"
+            phase_action = "choosing and running tools…"
+        _emit("planner_phase_start", f"{phase_label}: {phase_action}", planner_phase=phase)
         before = len(out.steps)
         try:
             planner_state, n_calls = run_planner_phase(
@@ -469,19 +526,29 @@ def run_investigation_orchestrator(
         out.raw_messages += n_calls
         _emit(
             "planner_phase_done",
-            f"{phase_label} complete (tool steps so far: {len(out.steps)})",
+            f"{phase_label} complete (investigation steps so far: {len(out.steps)})",
             planner_phase=phase,
             step_count=len(out.steps),
         )
         if max_tool_steps is not None and len(out.steps) >= max_tool_steps:
-            synth_user_prefix_holder[0] = (
-                f"STOPPED_TOOLING: Recorded **{max_tool_steps}** tool step(s) maximum "
-                "(`INVESTIGATION_MAX_TOOL_STEPS`, default **30**) — **no further tools** will run even if "
-                "the reviewer asks for more.\n"
-                "Reviewer: treat coverage as **best-effort** given the cap; if gaps remain, say so clearly in "
-                "`missing_aspects` but still allow synthesis to proceed.\n"
-                "Synthesis: summarize only tool-backed facts; state uncertainty and capped depth plainly."
-            )
+            if llm_cypher_trace:
+                synth_user_prefix_holder[0] = (
+                    f"STOPPED: Recorded **{max_tool_steps}** investigation step(s) maximum "
+                    "(`INVESTIGATION_MAX_TOOL_STEPS`, default **30**) — **no further Cypher** will run even if "
+                    "the reviewer asks for more.\n"
+                    "Reviewer: treat coverage as **best-effort** given the cap; if gaps remain, say so clearly in "
+                    "`missing_aspects` but still allow synthesis to proceed.\n"
+                    "Synthesis: summarize only trace-backed facts; state uncertainty and capped depth plainly."
+                )
+            else:
+                synth_user_prefix_holder[0] = (
+                    f"STOPPED_TOOLING: Recorded **{max_tool_steps}** tool step(s) maximum "
+                    "(`INVESTIGATION_MAX_TOOL_STEPS`, default **30**) — **no further tools** will run even if "
+                    "the reviewer asks for more.\n"
+                    "Reviewer: treat coverage as **best-effort** given the cap; if gaps remain, say so clearly in "
+                    "`missing_aspects` but still allow synthesis to proceed.\n"
+                    "Synthesis: summarize only tool-backed facts; state uncertainty and capped depth plainly."
+                )
             force_synth_after_judge = True
 
         if len(out.steps) == before and n_calls >= effective_max_rounds:
@@ -494,23 +561,36 @@ def run_investigation_orchestrator(
         if len(out.steps) == before:
             no_tool_streak += 1
             if no_tool_streak > 3:
-                out.error = "Planner repeatedly ended without calling tools."
+                out.error = (
+                    "Planner repeatedly ended without recording investigation steps."
+                    if llm_cypher_trace
+                    else "Planner repeatedly ended without calling tools."
+                )
                 return out
-            _planner_append_user(
-                backend,
-                planner_state,
-                (
+            if llm_cypher_trace:
+                nudge = (
+                    "You must emit at least one read-only Cypher query this segment "
+                    '(JSON with `"done": false` and a non-empty `"cypher"`) before ending with `"done": true`, '
+                    "unless the user question is already fully answered from prior Neo4j results in this conversation."
+                )
+            else:
+                nudge = (
                     "You must invoke at least one graph investigation tool "
                     "(for example search_nodes, get_graph_relationship_catalog, summarize_graph, "
                     "get_claim_network, get_person_policies, …) before stopping this segment."
-                ),
-            )
+                )
+            _planner_append_user(backend, planner_state, nudge)
             continue
         no_tool_streak = 0
         planner_phases_run += 1
 
         try:
-            _emit("review_start", "Reviewer: checking tool trace coverage…")
+            _emit(
+                "review_start",
+                "Reviewer: checking investigation trace coverage…"
+                if llm_cypher_trace
+                else "Reviewer: checking tool trace coverage…",
+            )
             judgment = extract_json_object(_judge_raw())
         except RuntimeError as exc:
             out.error = f"Coverage judge failed: {exc}"
@@ -522,7 +602,11 @@ def run_investigation_orchestrator(
                 JudgeRoundInfo(
                     satisfied=False,
                     rationale="Judge returned invalid or empty JSON.",
-                    feedback_for_planner="Continue: gather concrete tool evidence for every part of the question.",
+                    feedback_for_planner=(
+                        "Continue: run additional read-only Cypher for every part of the question."
+                        if llm_cypher_trace
+                        else "Continue: gather concrete tool evidence for every part of the question."
+                    ),
                 )
             )
             if bad_judge_streak >= 4:
@@ -534,12 +618,20 @@ def run_investigation_orchestrator(
                 )
                 return out
             if max_phases is not None and planner_phases_run >= max_phases:
-                synth_user_prefix_holder[0] = (
-                    f"STOPPED_EARLY: `INVESTIGATION_MAX_PLANNER_PHASES={max_phases}` — no further planner segment. "
-                    "The judge returned **invalid JSON**, so coverage could not be confirmed.\n"
-                    "In your answer: summarize only tool-backed facts, state uncertainty plainly, and list "
-                    "concrete follow-up tools or questions for a longer run."
-                )
+                if llm_cypher_trace:
+                    synth_user_prefix_holder[0] = (
+                        f"STOPPED_EARLY: `INVESTIGATION_MAX_PLANNER_PHASES={max_phases}` — no further planner segment. "
+                        "The judge returned **invalid JSON**, so coverage could not be confirmed.\n"
+                        "In your answer: summarize only trace-backed facts, state uncertainty plainly, and list "
+                        "concrete follow-up Cypher angles or questions for a longer run."
+                    )
+                else:
+                    synth_user_prefix_holder[0] = (
+                        f"STOPPED_EARLY: `INVESTIGATION_MAX_PLANNER_PHASES={max_phases}` — no further planner segment. "
+                        "The judge returned **invalid JSON**, so coverage could not be confirmed.\n"
+                        "In your answer: summarize only tool-backed facts, state uncertainty plainly, and list "
+                        "concrete follow-up tools or questions for a longer run."
+                    )
                 out.judge_rounds.append(
                     JudgeRoundInfo(
                         satisfied=True,
@@ -556,8 +648,14 @@ def run_investigation_orchestrator(
                 planner_state,
                 (
                     "The automated reviewer could not parse your coverage judgment. "
-                    "Continue the investigation with additional tools, then stop calling tools when ready "
-                    "for another review."
+                    "Continue the investigation with additional read-only Cypher, then end with "
+                    '`{"done": true, ...}` when ready for another review.'
+                    if llm_cypher_trace
+                    else (
+                        "The automated reviewer could not parse your coverage judgment. "
+                        "Continue the investigation with additional tools, then stop calling tools when ready "
+                        "for another review."
+                    )
                 ),
             )
             phase += 1
@@ -577,19 +675,34 @@ def run_investigation_orchestrator(
         if isinstance(fb_raw, str) and fb_raw.strip():
             feedback = fb_raw.strip()
         elif not satisfied:
-            feedback = (
-                "The reviewer is not satisfied yet. Address these gaps with tools: "
-                + "; ".join(str(x) for x in missing)
-                if missing
-                else "Gather additional tool evidence for the full question."
-            )
+            if llm_cypher_trace:
+                feedback = (
+                    "The reviewer is not satisfied yet. Address these gaps with additional read-only Cypher: "
+                    + "; ".join(str(x) for x in missing)
+                    if missing
+                    else "Run additional read-only Cypher to cover the full question."
+                )
+            else:
+                feedback = (
+                    "The reviewer is not satisfied yet. Address these gaps with tools: "
+                    + "; ".join(str(x) for x in missing)
+                    if missing
+                    else "Gather additional tool evidence for the full question."
+                )
 
         if force_synth_after_judge and max_tool_steps is not None:
-            rationale = (
-                rationale
-                + f" [Tool-step cap reached: **{max_tool_steps}** recorded tool step(s) maximum "
-                "(`INVESTIGATION_MAX_TOOL_STEPS`, default **30**) — no further planner tool calls are allowed.]"
-            )
+            if llm_cypher_trace:
+                rationale = (
+                    rationale
+                    + f" [Step cap reached: **{max_tool_steps}** recorded investigation step(s) maximum "
+                    "(`INVESTIGATION_MAX_TOOL_STEPS`, default **30**) — no further planner Cypher is allowed.]"
+                )
+            else:
+                rationale = (
+                    rationale
+                    + f" [Tool-step cap reached: **{max_tool_steps}** recorded tool step(s) maximum "
+                    "(`INVESTIGATION_MAX_TOOL_STEPS`, default **30**) — no further planner tool calls are allowed.]"
+                )
 
         out.judge_rounds.append(
             JudgeRoundInfo(
@@ -607,24 +720,42 @@ def run_investigation_orchestrator(
             break
 
         if max_phases is not None and planner_phases_run >= max_phases:
-            synth_user_prefix_holder[0] = (
-                f"STOPPED_EARLY: `INVESTIGATION_MAX_PLANNER_PHASES={max_phases}` — **no further planner segment** "
-                "will run. The coverage judge was **not satisfied** with the evidence so far.\n\n"
-                f"Judge rationale: {rationale}\n"
-                f"Missing aspects: {missing!r}\n"
-                f"Feedback that would have gone to the planner next (integrate as caveats, gaps, and suggested "
-                f"follow-ups — not as raw instructions to yourself):\n{feedback or '(none)'}\n\n"
-                "Your JSON answer must still be grounded only in the tool trace, but **think further** in prose: "
-                "call out unanswered angles, what another investigation pass might resolve, and specific "
-                "next tools or entity ids to try. Do not pretend the investigation was complete."
-            )
+            if llm_cypher_trace:
+                synth_user_prefix_holder[0] = (
+                    f"STOPPED_EARLY: `INVESTIGATION_MAX_PLANNER_PHASES={max_phases}` — **no further planner segment** "
+                    "will run. The coverage judge was **not satisfied** with the evidence so far.\n\n"
+                    f"Judge rationale: {rationale}\n"
+                    f"Missing aspects: {missing!r}\n"
+                    f"Feedback that would have gone to the planner next (integrate as caveats, gaps, and suggested "
+                    f"follow-ups — not as raw instructions to yourself):\n{feedback or '(none)'}\n\n"
+                    "Your JSON answer must still be grounded only in the investigation trace, but **think further** in prose: "
+                    "call out unanswered angles, what another investigation pass might resolve, and specific "
+                    "next Cypher angles or entity ids to try. Do not pretend the investigation was complete."
+                )
+                _phase_cap_rationale = (
+                    f"Stopped before another planner phase: **{max_phases}** Cypher-planner segment(s) maximum "
+                    f"(`INVESTIGATION_MAX_PLANNER_PHASES`). Synthesizing from the investigation trace gathered so far."
+                )
+            else:
+                synth_user_prefix_holder[0] = (
+                    f"STOPPED_EARLY: `INVESTIGATION_MAX_PLANNER_PHASES={max_phases}` — **no further planner segment** "
+                    "will run. The coverage judge was **not satisfied** with the evidence so far.\n\n"
+                    f"Judge rationale: {rationale}\n"
+                    f"Missing aspects: {missing!r}\n"
+                    f"Feedback that would have gone to the planner next (integrate as caveats, gaps, and suggested "
+                    f"follow-ups — not as raw instructions to yourself):\n{feedback or '(none)'}\n\n"
+                    "Your JSON answer must still be grounded only in the tool trace, but **think further** in prose: "
+                    "call out unanswered angles, what another investigation pass might resolve, and specific "
+                    "next tools or entity ids to try. Do not pretend the investigation was complete."
+                )
+                _phase_cap_rationale = (
+                    f"Stopped before another planner phase: **{max_phases}** tool-planner segment(s) maximum "
+                    f"(`INVESTIGATION_MAX_PLANNER_PHASES`). Synthesizing from the tool trace gathered so far."
+                )
             out.judge_rounds.append(
                 JudgeRoundInfo(
                     satisfied=True,
-                    rationale=(
-                        f"Stopped before another planner phase: **{max_phases}** tool-planner segment(s) maximum "
-                        f"(`INVESTIGATION_MAX_PLANNER_PHASES`). Synthesizing from the tool trace gathered so far."
-                    ),
+                    rationale=_phase_cap_rationale,
                     feedback_for_planner=None,
                 )
             )
@@ -635,7 +766,11 @@ def run_investigation_orchestrator(
             planner_state,
             (
                 "Reviewer feedback (internal — do not treat as the end-user answer):\n"
-                + (feedback or "Gather more evidence with tools for all parts of the question.")
+                + (
+                    feedback or "Gather more evidence with read-only Cypher for all parts of the question."
+                    if llm_cypher_trace
+                    else (feedback or "Gather more evidence with tools for all parts of the question.")
+                )
             ),
         )
         phase += 1
@@ -668,12 +803,19 @@ def run_investigation_orchestrator(
 
     if had_phase_cap_note:
         cap_hint = (
-            " [Depth capped by INVESTIGATION_MAX_PLANNER_PHASES — use 2–4 or omit for more planner–judge cycles.]"
+            " [Depth capped by INVESTIGATION_MAX_PLANNER_PHASES — use 2–4 or omit for more planner–judge cycles"
+            + (" (Cypher planner segments)." if llm_cypher_trace else " (tool-planner segments).)")
         )
         out.synthesis_rationale = (out.synthesis_rationale + cap_hint).strip()
 
     if not answer and backend in ("ollama", "anthropic"):
         try:
+            _trace_label = "Investigation trace (Cypher steps)" if llm_cypher_trace else "Tool trace"
+            _trace_only = (
+                "Use only facts from the investigation trace (Cypher inputs and row outputs) in the user message."
+                if llm_cypher_trace
+                else "Use only facts from the tool trace in the user message."
+            )
             if backend == "ollama":
                 from src.llm.local_ollama import ollama_generate_text as _ollama_text
 
@@ -681,7 +823,7 @@ def run_investigation_orchestrator(
                 ut = f"Investigator question:\n{out.question}\n\n"
                 if pre:
                     ut += pre + "\n\n"
-                ut += "Tool trace:\n" + _truncate_for_local_llm(
+                ut += f"{_trace_label}:\n" + _truncate_for_local_llm(
                     _serialize_trace_for_synthesis(out.question, out.steps),
                     min(_ollama_max_trace_chars(), 16_000),
                 )
@@ -690,7 +832,7 @@ def run_investigation_orchestrator(
                     model=model_name,
                     system_instruction=(
                         "You write the final investigation summary for an LTC SIU analyst. "
-                        "Use only facts from the tool trace in the user message. Output markdown (no JSON, no code fences): "
+                        f"{_trace_only} Output markdown (no JSON, no code fences): "
                         "optional short intro paragraph; line ### Key findings then '- ' bullets (one fact per bullet, "
                         "cite node ids like Person|1004); line ### Conclusion then exactly 1–2 takeaway sentences."
                     ),
@@ -705,13 +847,13 @@ def run_investigation_orchestrator(
                 ut = f"Investigator question:\n{out.question}\n\n"
                 if pre:
                     ut += pre + "\n\n"
-                ut += "Tool trace:\n" + _serialize_trace_for_synthesis(out.question, out.steps)
+                ut += f"{_trace_label}:\n" + _serialize_trace_for_synthesis(out.question, out.steps)
                 answer = _anthropic_text(
                     client,
                     model=model_name,
                     system_instruction=(
                         "You write the final investigation summary for an LTC SIU analyst. "
-                        "Use only facts from the tool trace in the user message. Output markdown (no JSON, no code fences): "
+                        f"{_trace_only} Output markdown (no JSON, no code fences): "
                         "optional short intro paragraph; line ### Key findings then '- ' bullets (one fact per bullet, "
                         "cite node ids like Person|1004); line ### Conclusion then exactly 1–2 takeaway sentences."
                     ),

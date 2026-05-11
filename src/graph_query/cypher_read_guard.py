@@ -70,3 +70,37 @@ def parse_cypher_json_payload(text: str) -> tuple[str, dict[str, object]]:
     if not isinstance(params, dict):
         raise ValueError('"params" must be an object if present.')
     return cy.strip(), params
+
+
+def parse_cypher_planner_json_payload(text: str) -> tuple[bool, str, dict[str, object], str]:
+    """
+    Parse **tool-free** planner output: ``{"done": <bool>, "cypher": "...", "params": {...}, "planner_note": "..."}``.
+
+    When ``done`` is true, ``cypher`` may be omitted or empty (no query to run this turn).
+    ``planner_note`` is optional in all cases.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("Empty model output for Cypher planner JSON.")
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw, re.IGNORECASE)
+    if m:
+        raw = m.group(1).strip()
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Model output is not valid JSON: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise ValueError("JSON root must be an object.")
+    done = bool(obj.get("done"))
+    note = str(obj.get("planner_note") or "").strip()
+    if done:
+        return True, "", {}, note
+    cy = obj.get("cypher")
+    if not isinstance(cy, str) or not cy.strip():
+        raise ValueError('When "done" is false, JSON must contain a non-empty string "cypher".')
+    params = obj.get("params", {})
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        raise ValueError('"params" must be an object if present.')
+    return False, cy.strip(), params, note

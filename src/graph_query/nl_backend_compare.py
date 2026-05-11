@@ -1,8 +1,8 @@
 """
-Run the **full investigation** (tool planner → judge → synthesis) twice for backend comparison.
+Run the **full investigation** (planner → judge → synthesis) twice for backend comparison.
 
 - **Hydrate:** same question on ``CSV → NetworkX`` vs ``Neo4j → NetworkX`` (both paths scan in-memory graphs).
-- **NX vs native vs LLM Cypher:** same CSV graph — NetworkX, hand-written native Cypher, and **LLM-generated** Cypher per tool.
+- **NX vs native vs LLM Cypher:** same CSV graph — NetworkX, hand-written native Cypher, and **tool-free** read-only Cypher from the investigation LLM (no provider tools).
 
 LLM calls are **non-deterministic**; traces may differ even when graph answers match. Use ``final_text``
 and tool payloads as the main comparison signal.
@@ -94,7 +94,7 @@ def run_nl_triple_nx_native_llm_cypher(
     cached_graph: nx.DiGraph | None = None,
 ) -> tuple[NlTripleCompareResult, float | None]:
     """
-    Same CSV graph: NetworkX scan vs native Cypher vs **LLM-authored Cypher** per tool call.
+    Same CSV graph: NetworkX scan vs native Cypher vs **tool-free Cypher planner** (chat JSON → Aura reads).
 
     Returns ``(result, hydrate_csv_ms)`` — hydrate ``None`` when *cached_graph* is passed.
     """

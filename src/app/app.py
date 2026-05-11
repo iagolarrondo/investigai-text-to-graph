@@ -47,6 +47,8 @@ from src.app.investigation_graph import (  # noqa: E402
 from src.app.entity_resolution import (  # noqa: E402
     append_verified_graph_node_hint,
     candidate_nodes,
+    collect_er_candidate_node_ids,
+    collect_er_priority_node_ids,
     fallback_mentions,
     filter_mentions_excluding_graph_anchors,
     format_candidate_option,
@@ -64,7 +66,13 @@ from src.graph_query.native_read_mode import (
 from src.graph_query.query_graph import get_graph, load_graph, summarize_graph  # noqa: E402
 from src.llm.tool_agent import ToolAgentResult, run_tool_planner_agent  # noqa: E402
 from src.session.context_resolver import resolve_question_with_session_memory  # noqa: E402
-from src.session.memory import build_turn_from_result, merge_session_referents, serialize_turn  # noqa: E402
+from src.session.memory import (  # noqa: E402
+    build_turn_from_result,
+    extend_referents_with_node_ids,
+    merge_session_referents,
+    serialize_turn,
+)
+from src.session.node_id_canonical import canonicalize_referents_dict  # noqa: E402
 from src.session.report import build_session_report_html, summarize_answer_bullets  # noqa: E402
 
 
@@ -217,7 +225,7 @@ def _run_with_backend(
     """Run the full investigation under a specific graph backend.
 
     ``backend`` is ``"networkx"``, ``"neo4j"`` (native Cypher helpers), or ``"llm_cypher"``
-    (investigation LLM emits read-only Cypher per tool). Returns ``(result, elapsed_seconds)``.
+    (tool-free Cypher planner: read-only Cypher JSON in a chat loop, no named tools). Returns ``(result, elapsed_seconds)``.
     """
     import time as _time
 
@@ -260,13 +268,27 @@ def main() -> None:
     inject_main_page_theme()
 
     st.title("InvestigAI")
-    st.caption("LTC investigation copilot — session memory and graph tools; planner → judge → synthesis unchanged.")
-    with st.expander("How investigations run", expanded=False):
+    with st.expander("How investigations are run", expanded=False):
         st.markdown(
-            "**Tool evaluation** checks whether the current graph tools fit your question (and may run **extension authoring** "
-            "when enabled). The LLM then executes **tool steps**—real graph queries—with a **per-investigation step cap**. "
-            "A **reviewer** reads the **full** tool trace for coverage; if gaps remain, planning can repeat. "
-            "**Synthesis** turns the trace into the **answer** (and graph focus) for this page."
+            """
+### Modes
+
+- **Investigate** (below): run **one** backend (**Single model**) or **compare** the same question across several (**Multiple model comparison**).
+- **Single model** choices, in short: **in-memory Python graph**, **Neo4j using fixed queries**, or **Neo4j where the model writes its own read-only queries**.
+- For deeper differences, open **How the three graph architectures differ** under Investigate.
+- **Comparison** runs don’t add to session history or the downloadable session report.
+
+### Session memory
+
+- Previous answers stay in **Session** so follow-ups can refer back.
+- The app may **rephrase** vague follow-ups or **ask you to clarify** what you mean.
+- If a name could match several people or places, you may see a **picker** before the run starts.
+- Use **Clear session memory** to start fresh; **Export session report** saves what ran.
+
+### What happens when you run
+
+- The model **explores the graph**, then a **review step** checks whether the question was answered, then a **final answer** (and graph highlight) is produced.
+            """.strip()
         )
 
     try:
@@ -286,7 +308,10 @@ def main() -> None:
     if "er_status" not in st.session_state:
         st.session_state["er_status"] = "idle"
 
-    summary = summarize_graph()
+    # Header metrics: in-memory graph only (CSV or Neo4j-hydrated), not a live Aura summarize.
+    # Avoids crashing the app when NEO4J_READ_MODE=native but routing fails (VPN/DNS).
+    with force_networkx_reads():
+        summary = summarize_graph()
     m1, m2, m3 = st.columns(3)
     m1.metric("Nodes", summary["num_nodes"])
     m2.metric("Edges", summary["num_edges"])
@@ -344,7 +369,7 @@ def main() -> None:
         _BACKEND_OPTIONS = [
             "NetworkX (Dynamic Python)",
             "Neo4j (NetworkX functions translated to Cypher)",
-            "Neo4j (LLM writes Cypher directly)",
+            "Neo4j (tool-free Cypher planner)",
         ]
         if run_mode == "Single model":
             st.pills(
@@ -356,7 +381,7 @@ def main() -> None:
                 help=(
                     "- **NetworkX (Dynamic Python)** — in-memory Python on a NetworkX DiGraph (default, no DB).\n"
                     "- **Neo4j (NetworkX functions translated to Cypher)** — engineer-written Cypher of the same tools, running on Aura.\n"
-                    "- **Neo4j (LLM writes Cypher directly)** — model authors read-only Cypher per tool at runtime, executed on Aura."
+                    "- **Neo4j (tool-free Cypher planner)** — no named graph tools: the investigation LLM emits read-only Cypher as JSON in a chat loop, validated and executed on Aura."
                 ),
             )
         else:
@@ -368,15 +393,14 @@ def main() -> None:
                 key="investigation_compare_backends",
                 help=(
                     "Click each model to include / exclude it. At least 2 must be selected. "
-                    "Both Neo4j backends need Aura + synced data; the LLM-Cypher path also incurs extra LLM calls per tool step."
+                    "Both Neo4j backends need Aura + synced data; the tool-free Cypher planner uses the investigation LLM each planner round (no provider tool API)."
                 ),
             )
         with st.expander("How the three graph architectures differ", expanded=False):
             st.markdown(
                 """
 **Shared front half (all modes)**  
-The user question goes through the same **tool planner** (Gemini / Claude / Ollama): the model picks the same
-**named tools** (`search_nodes`, `summarize_graph`, …), then the **coverage judge** and **synthesis** produce the answer.
+The user question goes through an **investigation LLM** (Gemini / Claude / Ollama), then the **coverage judge** and **synthesis** produce the answer. In **native** and **NetworkX** modes the model uses **named graph tools**; in **llm_cypher** mode there are **no provider tools** — only a Cypher JSON chat loop (see column 3).
 
 **1 — NetworkX (Dynamic Python)**
 Each tool call runs Python on an **in-memory** `networkx.DiGraph` loaded from CSV (or hydrated from Neo4j when
@@ -387,13 +411,13 @@ With `NEO4J_READ_MODE=native` (forced during comparison), each tool maps to **en
 `neo4j_native_reads` / `neo4j_native_heavy` — same inputs and outputs as the NetworkX functions, but the traversal is
 expressed as Cypher and executed by Aura (`:Entity`, `:GRAPH_EDGE`).
 
-**3 — Neo4j (LLM writes Cypher directly)**
-With `NEO4J_READ_MODE=llm_cypher` (forced for the third column), the **same** tool name and arguments are sent to the
-**investigation LLM**, which returns read-only Cypher + parameters; after validation, that query runs on Aura. The planner
-and tool *names* are unchanged — only the **implementation** of each step is model-generated instead of the engineer-written helpers.
+**3 — Neo4j (tool-free Cypher planner)**
+With `NEO4J_READ_MODE=llm_cypher` (forced for the third column), the investigation LLM **does not** receive named graph tools.
+It runs a multi-turn chat where each turn outputs strict JSON (`done`, optional `cypher` + `params`, optional `planner_note`);
+queries are validated as read-only and executed on Aura. Trace rows still appear as investigation steps for the judge (synthetic step type `__cypher__`).
                 """.strip()
             )
-        _, run_col = st.columns([5, 1])
+        _, run_col = st.columns([4, 2])
         with run_col:
             run = st.button(
                 "Run investigation",
@@ -623,7 +647,7 @@ and tool *names* are unchanged — only the **implementation** of each step is m
     _BACKEND_LABEL_TO_ID = {
         "NetworkX (Dynamic Python)": "networkx",
         "Neo4j (NetworkX functions translated to Cypher)": "neo4j",
-        "Neo4j (LLM writes Cypher directly)": "llm_cypher",
+        "Neo4j (tool-free Cypher planner)": "llm_cypher",
     }
     _run_mode = str(
         st.session_state.get("investigation_run_mode") or "Single model"
@@ -759,6 +783,24 @@ and tool *names* are unchanged — only the **implementation** of each step is m
                     )
                     turns = list(st.session_state.get("session_turns") or [])
                     row = serialize_turn(turn)
+                    cand_map = st.session_state.get("er_candidates") or {}
+                    if cand_map:
+                        picks_raw = st.session_state.get("er_selections") or {}
+                        extras = collect_er_candidate_node_ids(cand_map)
+                        prios = collect_er_priority_node_ids(cand_map, picks_raw)
+                        row["active_referents"] = extend_referents_with_node_ids(
+                            row.get("active_referents") or {},
+                            additional_ids=extras,
+                            priority_ids=prios,
+                        )
+                        try:
+                            row["active_referents"] = canonicalize_referents_dict(
+                                row["active_referents"], get_graph()
+                            )
+                        except RuntimeError:
+                            pass
+                        st.session_state["er_candidates"] = {}
+                        st.session_state["er_selections"] = {}
                     turns.append(row)
                     st.session_state["session_turns"] = turns[-30:]
                     st.session_state["session_active_referents"] = merge_session_referents(

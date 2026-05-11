@@ -87,13 +87,20 @@ def canonicalize_id_list(ids: Iterable[str], G: Any) -> list[str]:
     return out
 
 
-def canonicalize_referents_dict(refs: dict[str, str | None], G: Any) -> dict[str, str | None]:
+def canonicalize_referents_dict(refs: dict[str, Any] | None, G: Any) -> dict[str, Any]:
     """
     Keep only referent values that resolve to a node in ``G``.
-    Multiple keys may end up with the same canonical id (allowed).
+
+    Values may be a **string** (``primary_person``, ``graph_focus``, …) or a **list** of ids
+    (``ids_person``, ``ids_claim``, …) from session rollup.
     """
-    out: dict[str, str | None] = {}
+    out: dict[str, Any] = {}
     for k, v in (refs or {}).items():
+        if isinstance(v, list):
+            canon_list = canonicalize_id_list([str(x) for x in v if x], G)
+            if canon_list:
+                out[k] = canon_list
+            continue
         if not v or not str(v).strip():
             continue
         canon = resolve_node_id_to_graph(str(v).strip(), G)

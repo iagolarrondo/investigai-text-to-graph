@@ -461,16 +461,10 @@ def _execute_graph_tool_raw(name: str, tool_input: dict[str, Any]) -> str:
     """Run one tool; return full text before context-window truncation."""
     try:
         if neo4j_llm_cypher_reads_enabled():
-            from src.llm.cypher_tool_execution import (
-                execute_extension_via_llm_cypher,
-                execute_tool_via_llm_cypher,
+            return (
+                "ERROR: NEO4J_READ_MODE=llm_cypher uses a tool-free Cypher planner — "
+                "named graph tools are not executed here. This should not happen."
             )
-
-            if name in active_extension_tool_names():
-                return execute_extension_via_llm_cypher(name, dict(tool_input))
-            if name in NATIVE_READ_TOOLS:
-                return execute_tool_via_llm_cypher(name, dict(tool_input))
-            return f"Unknown tool: {name}"
 
         ext_fn = _EXTENSION_HANDLERS.get(name)
         if ext_fn is not None:
@@ -645,6 +639,21 @@ def run_planner_phase(
                 result_preview=body_full,
                 planner_phase=phase,
             )
+        )
+
+    if neo4j_llm_cypher_reads_enabled():
+        from src.llm.cypher_planner import run_cypher_planner_phase
+
+        return run_cypher_planner_phase(
+            client,
+            contents,
+            out_steps,
+            planner_phase=planner_phase,
+            max_rounds=max_rounds,
+            progress_cb=progress_cb,
+            max_total_tool_steps=max_total_tool_steps,
+            truncate_for_model=_truncate,
+            append_tool_step=_append_step,
         )
 
     def _execute_tool_with_events(name: str, tool_input: dict[str, Any], *, for_model: bool = True) -> str:

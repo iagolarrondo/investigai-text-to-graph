@@ -7,6 +7,7 @@ import pytest
 from src.graph_query.cypher_read_guard import (
     extract_cypher_from_model_output,
     parse_cypher_json_payload,
+    parse_cypher_planner_json_payload,
     validate_read_only_cypher,
 )
 
@@ -41,3 +42,28 @@ def test_parse_cypher_json_fenced() -> None:
     cy, p = parse_cypher_json_payload(raw)
     assert "RETURN" in cy
     assert p == {}
+
+
+def test_parse_planner_json_done() -> None:
+    done, cy, params, note = parse_cypher_planner_json_payload(
+        '{"done": true, "planner_note": "ready for review"}'
+    )
+    assert done is True
+    assert cy == ""
+    assert params == {}
+    assert note == "ready for review"
+
+
+def test_parse_planner_json_cypher_round() -> None:
+    done, cy, params, note = parse_cypher_planner_json_payload(
+        '{"done": false, "cypher": "MATCH (n:Entity) RETURN count(n) AS c LIMIT 1", "params": {}}'
+    )
+    assert done is False
+    assert "MATCH" in cy
+    assert params == {}
+    assert note == ""
+
+
+def test_parse_planner_json_requires_cypher_when_not_done() -> None:
+    with pytest.raises(ValueError, match="cypher"):
+        parse_cypher_planner_json_payload('{"done": false, "params": {}}')

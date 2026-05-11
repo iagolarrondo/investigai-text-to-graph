@@ -255,5 +255,91 @@
     },
     "active": true,
     "created_at": "2026-05-10T18:23:32.835124+00:00"
+  },
+  {
+    "name": "find_businesses_at_location",
+    "module": "find_businesses_at_location",
+    "description": "Find Business nodes (and similar commercial entity nodes) associated with a given location — specified as a location node ID, address substring, city, or state. Returns matching business node IDs, labels, types, and any address/location context. Use when the user asks 'are any businesses located at/in [place]?' or 'what businesses are at this address/location?' First call search_nodes or get_graph_relationship_catalog if you need to discover the location node ID, then pass it here.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "location_node_id": {
+          "type": "string",
+          "description": "Exact node ID of a location/address node to find businesses connected to. Optional if address_substring is provided."
+        },
+        "address_substring": {
+          "type": "string",
+          "description": "Substring to match against address, city, state, or label properties on any node. Used to search for businesses by location text when a node ID is not known."
+        },
+        "city": {
+          "type": "string",
+          "description": "City name to filter businesses by (case-insensitive substring match on address/city properties)."
+        },
+        "state": {
+          "type": "string",
+          "description": "State name or abbreviation to filter businesses by (case-insensitive substring match)."
+        }
+      },
+      "required": []
+    },
+    "active": true,
+    "created_at": "2026-05-11T20:54:42.190235+00:00"
+  },
+  {
+    "name": "get_claim_icp_hourly_rates",
+    "module": "get_claim_icp_hourly_rates",
+    "description": "Given a claim_id, traverses from the Claim node to any ICP (Independent Care Provider / IndependentCareProvider) nodes and returns each ICP's node id, label, and hourly rate (any property whose key contains 'hourly_rate', 'rate', or 'compensation'). Use when the question asks about the hourly rate of each ICP linked to a specific claim.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The exact node id of the Claim (e.g. 'CLM-2024-10180')."
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-11T21:37:52.206319+00:00"
+  },
+  {
+    "name": "get_claim_icp_paid_amounts",
+    "module": "get_claim_icp_paid_amounts",
+    "description": "Given a claim_id, traverses Claim → ICP (IndependentCareProvider) nodes, then for each ICP traverses to linked Payment nodes (via any edge), and sums the paid/amount property on those Payment nodes per ICP. Returns a list of {icp_id, icp_label, total_paid_amount, payment_count}. Use when the question asks for the total paid amount to each ICP on a specific claim.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The exact node id of the claim (e.g. 'CLM-2023-10093')."
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-11T21:42:31.267902+00:00"
+  },
+  {
+    "name": "get_claim_icp_policyholder_address_comparison",
+    "module": "get_claim_icp_policyholder_address_comparison",
+    "description": "Given a claim_id, traverses Claim → ICP (IndependentCareProvider) and Claim → Policy → Policyholder to retrieve the home address properties for both the ICP and the policyholder. Returns both addresses side-by-side with a boolean shared_address flag. Use when the question asks whether the ICP on a claim shares a home address with the policyholder.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "description": "The claim node ID or label (e.g. 'CLM-2025-10216')."
+        }
+      },
+      "required": [
+        "claim_id"
+      ]
+    },
+    "active": true,
+    "created_at": "2026-05-11T21:58:56.700166+00:00"
   }
 ]
