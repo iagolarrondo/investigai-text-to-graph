@@ -234,56 +234,21 @@ def _run_with_backend(
     return result, _time.time() - start
 
 
-def _render_three_way_comparison(
-    nx_result: ToolAgentResult,
-    neo4j_result: ToolAgentResult,
-    llm_result: ToolAgentResult,
-    nx_elapsed: float,
-    neo4j_elapsed: float,
-    llm_elapsed: float,
-) -> None:
-    """Render NetworkX, Neo4j native, and LLM-authored Cypher results side-by-side."""
-    c1, c2, c3 = st.columns(3, gap="large")
-    with c1:
-        st.markdown(
-            f"## NetworkX &nbsp;&nbsp; <span style='font-size:0.8em;color:gray;'>⏱ {nx_elapsed:.1f}s</span>",
-            unsafe_allow_html=True,
-        )
-        _render_tool_planner_result(nx_result, key_suffix="_nx3")
-    with c2:
-        st.markdown(
-            f"## Neo4j native &nbsp;&nbsp; <span style='font-size:0.8em;color:gray;'>⏱ {neo4j_elapsed:.1f}s</span>",
-            unsafe_allow_html=True,
-        )
-        _render_tool_planner_result(neo4j_result, key_suffix="_neo3")
-    with c3:
-        st.markdown(
-            f"## LLM Cypher &nbsp;&nbsp; <span style='font-size:0.8em;color:gray;'>⏱ {llm_elapsed:.1f}s</span>",
-            unsafe_allow_html=True,
-        )
-        _render_tool_planner_result(llm_result, key_suffix="_llm3")
-
-
-def _render_comparison_results(
-    nx_result: ToolAgentResult,
-    neo4j_result: ToolAgentResult,
-    nx_elapsed: float,
-    neo4j_elapsed: float,
-) -> None:
-    """Render NetworkX and Neo4j investigation results side-by-side."""
-    col_nx, col_neo = st.columns(2, gap="large")
-    with col_nx:
-        st.markdown(
-            f"## NetworkX &nbsp;&nbsp; <span style='font-size:0.8em;color:gray;'>⏱ {nx_elapsed:.1f}s</span>",
-            unsafe_allow_html=True,
-        )
-        _render_tool_planner_result(nx_result, key_suffix="_nx")
-    with col_neo:
-        st.markdown(
-            f"## Neo4j Native &nbsp;&nbsp; <span style='font-size:0.8em;color:gray;'>⏱ {neo4j_elapsed:.1f}s</span>",
-            unsafe_allow_html=True,
-        )
-        _render_tool_planner_result(neo4j_result, key_suffix="_neo4j")
+def _render_compare_runs(runs: list[dict]) -> None:
+    """Render N compare runs side-by-side. Each entry: {id,label,result,elapsed}."""
+    if not runs:
+        return
+    cols = st.columns(len(runs), gap="large")
+    for col, run in zip(cols, runs):
+        label = run.get("label", run.get("id", "Backend"))
+        elapsed = float(run.get("elapsed") or 0)
+        key_suffix = f"_cmp_{run.get('id', label)}"
+        with col:
+            st.markdown(
+                f"## {label} &nbsp;&nbsp; <span style='font-size:0.8em;color:gray;'>⏱ {elapsed:.1f}s</span>",
+                unsafe_allow_html=True,
+            )
+            _render_tool_planner_result(run["result"], key_suffix=key_suffix)
 
 
 def main() -> None:
@@ -365,27 +330,47 @@ def main() -> None:
             label_visibility="collapsed",
             help="The model picks graph tools—search, relationship catalog, claim and person queries, pattern scans.",
         )
-        compare_all_three = st.toggle(
-            "Compare all three architectures side-by-side",
-            value=False,
-            key="compare_all_three_toggle",
-            help=(
-                "One click: runs three full investigations (same question) — **NetworkX** in-memory scans, "
-                "**Neo4j native** hand-written Cypher helpers, **LLM Cypher** model-authored read-only Cypher per tool. "
-                "Requires Neo4j Aura, synced data, and your investigation LLM keys. Expect extra latency and API cost."
-            ),
-        )
-        st.radio(
-            "Or choose comparison detail (when the toggle is off)",
-            ("Off", "NetworkX vs Neo4j native", "Three-way: + LLM-authored Cypher per tool"),
+        run_mode = st.radio(
+            "Single model or multiple model comparison",
+            ("Single model", "Multiple model comparison"),
+            index=0,
             horizontal=True,
-            key="investigation_compare_mode",
-            disabled=compare_all_three,
+            key="investigation_run_mode",
             help=(
-                "Dual mode runs two investigations. Three-way adds a third path where each graph tool is implemented "
-                "by asking the investigation LLM for read-only Cypher (many extra LLM calls + Aura reads)."
+                "**Single model** runs the investigation on one graph backend. "
+                "**Multiple model comparison** runs the same question against 2+ backends side-by-side."
             ),
         )
+        _BACKEND_OPTIONS = [
+            "NetworkX (Dynamic Python)",
+            "Neo4j (NetworkX functions translated to Cypher)",
+            "Neo4j (LLM writes Cypher directly)",
+        ]
+        if run_mode == "Single model":
+            st.pills(
+                "Model",
+                options=_BACKEND_OPTIONS,
+                selection_mode="single",
+                default="NetworkX (Dynamic Python)",
+                key="investigation_single_backend",
+                help=(
+                    "- **NetworkX (Dynamic Python)** — in-memory Python on a NetworkX DiGraph (default, no DB).\n"
+                    "- **Neo4j (NetworkX functions translated to Cypher)** — engineer-written Cypher of the same tools, running on Aura.\n"
+                    "- **Neo4j (LLM writes Cypher directly)** — model authors read-only Cypher per tool at runtime, executed on Aura."
+                ),
+            )
+        else:
+            st.pills(
+                "Models to compare (click to toggle)",
+                options=_BACKEND_OPTIONS,
+                selection_mode="multi",
+                default=_BACKEND_OPTIONS,
+                key="investigation_compare_backends",
+                help=(
+                    "Click each model to include / exclude it. At least 2 must be selected. "
+                    "Both Neo4j backends need Aura + synced data; the LLM-Cypher path also incurs extra LLM calls per tool step."
+                ),
+            )
         with st.expander("How the three graph architectures differ", expanded=False):
             st.markdown(
                 """
@@ -393,18 +378,19 @@ def main() -> None:
 The user question goes through the same **tool planner** (Gemini / Claude / Ollama): the model picks the same
 **named tools** (`search_nodes`, `summarize_graph`, …), then the **coverage judge** and **synthesis** produce the answer.
 
-**1 — NetworkX (in-memory)**  
+**1 — NetworkX (Dynamic Python)**
 Each tool call runs Python on an **in-memory** `networkx.DiGraph` loaded from CSV (or hydrated from Neo4j when
-`GRAPH_BACKEND=neo4j`). No per-tool Cypher; graph logic is the reference implementations in `query_graph`.
+`GRAPH_BACKEND=neo4j`). No DB queries; graph logic is the reference implementations in `query_graph`.
 
-**2 — Neo4j native**  
-With `NEO4J_READ_MODE=native` (forced during comparison), each tool maps to **hand-written** Cypher in
-`neo4j_native_reads` / `neo4j_native_heavy`, executed via `run_read_query` against Aura (`:Entity`, `:GRAPH_EDGE`).
+**2 — Neo4j (NetworkX functions translated to Cypher)**
+With `NEO4J_READ_MODE=native` (forced during comparison), each tool maps to **engineer-written** Cypher in
+`neo4j_native_reads` / `neo4j_native_heavy` — same inputs and outputs as the NetworkX functions, but the traversal is
+expressed as Cypher and executed by Aura (`:Entity`, `:GRAPH_EDGE`).
 
-**3 — LLM-authored Cypher**  
+**3 — Neo4j (LLM writes Cypher directly)**
 With `NEO4J_READ_MODE=llm_cypher` (forced for the third column), the **same** tool name and arguments are sent to the
 **investigation LLM**, which returns read-only Cypher + parameters; after validation, that query runs on Aura. The planner
-and tool *names* are unchanged — only the **implementation** of each step is model-generated instead of the native Python helpers.
+and tool *names* are unchanged — only the **implementation** of each step is model-generated instead of the engineer-written helpers.
                 """.strip()
             )
         _, run_col = st.columns([5, 1])
@@ -634,15 +620,33 @@ and tool *names* are unchanged — only the **implementation** of each step is m
         else:
             _reset_entity_resolution()
 
-    compare_all_three = bool(st.session_state.get("compare_all_three_toggle", False))
-    if compare_all_three:
-        _compare_mode_active = True
-        _triple_compare = True
-        _cmp = "Three-way (toggle)"
+    _BACKEND_LABEL_TO_ID = {
+        "NetworkX (Dynamic Python)": "networkx",
+        "Neo4j (NetworkX functions translated to Cypher)": "neo4j",
+        "Neo4j (LLM writes Cypher directly)": "llm_cypher",
+    }
+    _run_mode = str(
+        st.session_state.get("investigation_run_mode") or "Single model"
+    )
+    if _run_mode == "Multiple model comparison":
+        _selected_compare_labels = list(
+            st.session_state.get("investigation_compare_backends") or []
+        )
+        _compare_backends = [
+            (_BACKEND_LABEL_TO_ID[lbl], lbl)
+            for lbl in _selected_compare_labels
+            if lbl in _BACKEND_LABEL_TO_ID
+        ]
+        _compare_mode_active = len(_compare_backends) >= 2
+        _single_backend_id = None
     else:
-        _cmp = str(st.session_state.get("investigation_compare_mode", "Off") or "Off")
-        _compare_mode_active = _cmp != "Off"
-        _triple_compare = _cmp.startswith("Three")
+        _compare_mode_active = False
+        _compare_backends = []
+        _single_label = str(
+            st.session_state.get("investigation_single_backend")
+            or "NetworkX (Dynamic Python)"
+        )
+        _single_backend_id = _BACKEND_LABEL_TO_ID.get(_single_label, "networkx")
 
     # If we have a pending (possibly rewritten) question and we're idle, run now.
     if st.session_state.get("er_status") == "idle" and st.session_state.get("er_pending_question"):
@@ -651,7 +655,7 @@ and tool *names* are unchanged — only the **implementation** of each step is m
         st.session_state["er_pending_question"] = ""
         if q_to_run:
             if _compare_mode_active:
-                # ── Compare mode: run NetworkX, Neo4j native, and (optionally) LLM Cypher ─
+                # ── Compare mode: run the selected backends sequentially ─────────
                 def _make_progress_cb(label: str, status_el: "st.delta_generator.DeltaGenerator", recent_el: "st.delta_generator.DeltaGenerator") -> callable:  # type: ignore[name-defined]
                     _phase_start = [time.time()]
                     _events: list[str] = []
@@ -677,52 +681,28 @@ and tool *names* are unchanged — only the **implementation** of each step is m
                     return _cb
 
                 try:
-                    st.info("Running **NetworkX** investigation…")
-                    nx_status = st.empty()
-                    nx_recent = st.empty()
-                    with st.spinner("NetworkX — working…"):
-                        nx_result, nx_elapsed = _run_with_backend(
-                            q_to_run,
-                            "networkx",
-                            progress_cb=_make_progress_cb("NetworkX", nx_status, nx_recent),
-                        )
-                    nx_status.empty()
-                    nx_recent.empty()
-
-                    st.info("Running **Neo4j native** investigation…")
-                    neo_status = st.empty()
-                    neo_recent = st.empty()
-                    with st.spinner("Neo4j native — working…"):
-                        neo4j_result, neo4j_elapsed = _run_with_backend(
-                            q_to_run,
-                            "neo4j",
-                            progress_cb=_make_progress_cb("Neo4j native", neo_status, neo_recent),
-                        )
-                    neo_status.empty()
-                    neo_recent.empty()
-
-                    payload: dict = {
-                        "triple": bool(_triple_compare),
-                        "nx_result": nx_result,
-                        "neo4j_result": neo4j_result,
-                        "nx_elapsed": nx_elapsed,
-                        "neo4j_elapsed": neo4j_elapsed,
-                    }
-                    if _triple_compare:
-                        st.info("Running **LLM-authored Cypher** investigation (extra LLM call per tool)…")
-                        llm_status = st.empty()
-                        llm_recent = st.empty()
-                        with st.spinner("LLM Cypher — working…"):
-                            llm_result, llm_elapsed = _run_with_backend(
+                    runs: list[dict] = []
+                    for backend_id, backend_label in _compare_backends:
+                        st.info(f"Running **{backend_label}** investigation…")
+                        s_el = st.empty()
+                        r_el = st.empty()
+                        with st.spinner(f"{backend_label} — working…"):
+                            result, elapsed = _run_with_backend(
                                 q_to_run,
-                                "llm_cypher",
-                                progress_cb=_make_progress_cb("LLM Cypher", llm_status, llm_recent),
+                                backend_id,
+                                progress_cb=_make_progress_cb(backend_label, s_el, r_el),
                             )
-                        llm_status.empty()
-                        llm_recent.empty()
-                        payload["llm_cypher_result"] = llm_result
-                        payload["llm_cypher_elapsed"] = llm_elapsed
-                    st.session_state["last_compare_run"] = payload
+                        s_el.empty()
+                        r_el.empty()
+                        runs.append(
+                            {
+                                "id": backend_id,
+                                "label": backend_label,
+                                "result": result,
+                                "elapsed": elapsed,
+                            }
+                        )
+                    st.session_state["last_compare_run"] = {"runs": runs}
                     # Clear any previous single-backend result so we only render the comparison.
                     st.session_state.pop("last_tool_run", None)
                 except Exception as exc:
@@ -754,7 +734,17 @@ and tool *names* are unchanged — only the **implementation** of each step is m
 
                     with st.spinner("Working…"):
                         q_planner = append_verified_graph_node_hint(q_to_run, get_graph())
-                        tr = run_tool_planner_agent(q_planner, progress_cb=_progress_cb)
+                        if _single_backend_id == "networkx":
+                            with force_networkx_reads():
+                                tr = run_tool_planner_agent(q_planner, progress_cb=_progress_cb)
+                        elif _single_backend_id == "neo4j":
+                            with temporary_neo4j_read_native():
+                                tr = run_tool_planner_agent(q_planner, progress_cb=_progress_cb)
+                        elif _single_backend_id == "llm_cypher":
+                            with temporary_neo4j_read_llm_cypher():
+                                tr = run_tool_planner_agent(q_planner, progress_cb=_progress_cb)
+                        else:
+                            tr = run_tool_planner_agent(q_planner, progress_cb=_progress_cb)
                     status.empty()
                     recent.empty()
                     st.session_state["last_tool_run"] = tr
@@ -785,34 +775,16 @@ and tool *names* are unchanged — only the **implementation** of each step is m
     if compare_run:
         st.divider()
         st.caption("_Session memory and HTML export only include single-backend runs, not this comparison._")
-        if compare_run.get("triple"):
-            st.markdown(
-                f"**Three-way comparison** — NetworkX **{compare_run['nx_elapsed']:.1f}s**, "
-                f"Neo4j native **{compare_run['neo4j_elapsed']:.1f}s**, "
-                f"LLM Cypher **{compare_run.get('llm_cypher_elapsed', 0):.1f}s**."
+        runs = compare_run.get("runs") or []
+        if runs:
+            summary = " · ".join(
+                f"**{r.get('label', r.get('id', 'Backend'))}** {float(r.get('elapsed') or 0):.1f}s"
+                for r in runs
             )
-            _render_three_way_comparison(
-                compare_run["nx_result"],
-                compare_run["neo4j_result"],
-                compare_run["llm_cypher_result"],
-                compare_run["nx_elapsed"],
-                compare_run["neo4j_elapsed"],
-                float(compare_run.get("llm_cypher_elapsed") or 0),
-            )
+            st.markdown(f"**Comparison run** — {summary}")
+            _render_compare_runs(runs)
         else:
-            st.markdown(
-                f"**Comparison run** — NetworkX finished in **{compare_run['nx_elapsed']:.1f}s**, "
-                f"Neo4j finished in **{compare_run['neo4j_elapsed']:.1f}s** "
-                f"({compare_run['neo4j_elapsed'] / compare_run['nx_elapsed']:.2f}× relative)."
-                if compare_run["nx_elapsed"] > 0
-                else "**Comparison run complete.**"
-            )
-            _render_comparison_results(
-                compare_run["nx_result"],
-                compare_run["neo4j_result"],
-                compare_run["nx_elapsed"],
-                compare_run["neo4j_elapsed"],
-            )
+            st.info("Comparison run completed but produced no results.")
     elif last is not None:
         _render_tool_planner_result(last)
     elif not (question or "").strip():

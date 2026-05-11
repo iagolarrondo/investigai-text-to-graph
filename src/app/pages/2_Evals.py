@@ -47,17 +47,12 @@ from src.graph_query.query_graph import get_graph, load_graph  # noqa: E402
 from src.llm.tool_agent import run_tool_planner_agent  # noqa: E402
 
 
-_BACKEND_CHOICES: dict[str, list[tuple[str, str]]] = {
-    "Current/default": [("default", "Current/default")],
-    "NetworkX": [("networkx", "NetworkX")],
-    "Neo4j native": [("neo4j_native", "Neo4j native")],
-    "LLM Cypher": [("llm_cypher", "LLM Cypher")],
-    "All three": [
-        ("networkx", "NetworkX"),
-        ("neo4j_native", "Neo4j native"),
-        ("llm_cypher", "LLM Cypher"),
-    ],
+_BACKEND_LABEL_TO_ID: dict[str, str] = {
+    "NetworkX (Dynamic Python)": "networkx",
+    "Neo4j (NetworkX functions translated to Cypher)": "neo4j_native",
+    "Neo4j (LLM writes Cypher directly)": "llm_cypher",
 }
+_SINGLE_BACKEND_LABELS: list[str] = list(_BACKEND_LABEL_TO_ID.keys())
 
 
 def _backend_context(backend_id: str) -> AbstractContextManager[Any]:
@@ -203,16 +198,43 @@ with c4:
 with c5:
     seed = st.number_input("Seed", value=42, step=1, help="For reproducible random sampling.")
 
-backend_mode = st.selectbox(
-    "Graph backend(s)",
-    options=list(_BACKEND_CHOICES.keys()),
+run_mode = st.radio(
+    "Single model or multiple model comparison",
+    options=["Single model", "Multiple model comparison"],
     index=0,
+    horizontal=True,
     help=(
-        "Choose one execution path, or run each selected eval against NetworkX, "
-        "Neo4j native Cypher, and LLM-authored Cypher."
+        "**Single model** runs each selected eval on one graph backend. "
+        "**Multiple model comparison** runs each eval against 2+ backends."
     ),
 )
-selected_backends = _BACKEND_CHOICES[backend_mode]
+if run_mode == "Multiple model comparison":
+    compare_labels = st.pills(
+        "Models to compare (click to toggle)",
+        options=_SINGLE_BACKEND_LABELS,
+        selection_mode="multi",
+        default=_SINGLE_BACKEND_LABELS,
+        help=(
+            "Click each model to include / exclude it. "
+            "Total runs = (eval rows sampled) × (backends selected)."
+        ),
+    ) or []
+    selected_backends = [(_BACKEND_LABEL_TO_ID[l], l) for l in compare_labels]
+    if not selected_backends:
+        st.warning("Select at least one backend to compare.")
+else:
+    single_label = st.pills(
+        "Model",
+        options=_SINGLE_BACKEND_LABELS,
+        selection_mode="single",
+        default=_SINGLE_BACKEND_LABELS[0],
+        help=(
+            "- **NetworkX (Dynamic Python)** — in-memory Python on a NetworkX DiGraph (default, no DB).\n"
+            "- **Neo4j (NetworkX functions translated to Cypher)** — engineer-written Cypher of the same tools, running on Aura.\n"
+            "- **Neo4j (LLM writes Cypher directly)** — model authors read-only Cypher per tool at runtime, executed on Aura."
+        ),
+    ) or _SINGLE_BACKEND_LABELS[0]
+    selected_backends = [(_BACKEND_LABEL_TO_ID[single_label], single_label)]
 
 use_llm_judge = st.checkbox(
     "Use LLM judge for scoring",
@@ -341,7 +363,7 @@ if results:
 
     df = pd.DataFrame(results)
     if "backend" not in df.columns:
-        df["backend"] = "Current/default"
+        df["backend"] = "NetworkX (Dynamic Python)"
     n = len(df)
     n_pass = int(df["passed"].sum())
     n_fail = n - n_pass
@@ -415,7 +437,7 @@ if results:
         options=options,
         format_func=lambda i: (
             f"{results[i]['qid']} · {results[i]['claim']} · "
-            f"{results[i].get('backend', 'Current/default')} · "
+            f"{results[i].get('backend', 'NetworkX (Dynamic Python)')} · "
             f"{'PASS' if results[i]['passed'] else 'FAIL'}"
         ),
     )
@@ -423,7 +445,7 @@ if results:
         r = results[pick]
         st.markdown(f"**Question:** {r['question']}")
         st.markdown(f"**Bucket:** {r['bucket']}")
-        st.markdown(f"**Backend:** {r.get('backend', 'Current/default')}")
+        st.markdown(f"**Backend:** {r.get('backend', 'NetworkX (Dynamic Python)')}")
         st.markdown(f"**Expected ({r['expected_type']}):**")
         st.code(r["expected"] or "(empty)", language="json" if r["expected_type"] in ("list", "object") else None)
         st.markdown("**Actual answer:**")
