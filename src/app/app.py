@@ -338,7 +338,7 @@ def main() -> None:
             st.session_state["session_active_referents"] = {}
             st.session_state["ctx_last_decision"] = None
             st.session_state["ctx_status"] = "idle"
-            st.toast("Session memory cleared.", icon="✓")
+            st.toast("Session memory cleared.", icon="✅")
 
     section_label("Investigate")
     with st.container(border=True):
